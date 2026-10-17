@@ -1,0 +1,70 @@
+﻿{
+  "personal_info": {
+    "full_name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "phone": "+91-9000000000",
+    "location": "Mumbai, India",
+    "linkedin_url": "https://linkedin.com/in/janedoe",
+    "github_url": "https://github.com/janedoe"
+  },
+  "education": [
+    {
+      "institution": "Test University",
+      "degree": "B.Tech Computer Science",
+      "location": "Mumbai, India",
+      "start_date": "2021-08",
+      "end_date": "2025-05",
+      "relevant_coursework": ["Data Structures", "Operating Systems"],
+      "achievements": []
+    }
+  ],
+  "experience": [
+    {
+      "id": "exp-001",
+      "organization": "Acme Corp",
+      "role": "Software Intern",
+      "employment_type": "internship",
+      "location": "Remote",
+      "start_date": "2024-05",
+      "end_date": "2024-08",
+      "responsibilities": ["Built REST APIs using FastAPI", "Wrote unit tests"],
+      "verified_achievements": [],
+      "technologies_used": ["Python", "FastAPI"],
+      "references_available": false
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-001",
+      "name": "Awesome CLI Tool",
+      "type": "personal",
+      "start_date": "2024-01",
+      "end_date": "2024-03",
+      "short_description": "A command-line tool that automates file organisation.",
+      "long_description": "Built with Python. Sorts files by type and date.",
+      "technologies": ["Python", "Click"],
+      "my_contributions": ["Designed the CLI interface", "Wrote all tests"],
+      "outcomes": [],
+      "links": {"github": "https://github.com/janedoe/awesome-cli", "demo": null, "paper": null},
+      "highlight_for_roles": ["backend"]
+    }
+  ],
+  "technical_skills": {
+    "languages": ["Python", "JavaScript"],
+    "frameworks_and_libraries": ["FastAPI", "React"],
+    "databases": ["PostgreSQL"],
+    "tools_and_platforms": ["Git", "Docker"],
+    "ml_and_data": [],
+    "soft_skills": ["Technical writing"]
+  },
+  "achievements_and_awards": [],
+  "verified_metrics": {},
+  "preferences": {
+    "target_roles": ["Software Engineering Intern"],
+    "target_industries": ["FinTech"],
+    "preferred_locations": ["Remote"],
+    "availability_start": "2025-06",
+    "availability_duration_months": 6,
+    "existing_cv_path": null
+  }
+}

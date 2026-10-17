@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Outreach Dashboard</h1>
+    <p class="page-subtitle">Real-time pipeline state, batch runs, and pending draft reviews.</p>
+  </div>
+  <div class="header-actions">
+    <a href="{{ url_for('import_contacts_page') }}" class="btn btn-primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+      New campaign
+    </a>
+    <a href="{{ url_for('review_queue') }}" class="btn btn-secondary">
+      Review queue ({{ stats.needs_review }})
+    </a>
+    {% if stats.recent_batches %}
+    <a href="#batches" class="btn btn-secondary" id="headerBatchBtn">
+      Batch history ({{ stats.recent_batches|length }})
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Resend-style Connected Stats Row -->
+<div class="stats-row">
+  <div class="stat-item">
+    <span class="stat-label">Imported</span>
+    <span class="stat-value">{{ stats.total_imported }}</span>
+    <span class="stat-desc">Batch contact rows</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Processed</span>
+    <span class="stat-value">{{ stats.total_processed }}</span>
+    <span class="stat-desc">Researched in batches</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Drafts</span>
+    <span class="stat-value">{{ stats.drafts_created }}</span>
+    <span class="stat-desc">Active saved files</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Needs Review</span>
+    <span class="stat-value" style="color:var(--warning);">{{ stats.needs_review }}</span>
+    <span class="stat-desc">Pending human review</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Blocked / Errored</span>
+    <span class="stat-value" style="color:var(--danger);">{{ stats.blocked_count + stats.failed_count }}</span>
+    <span class="stat-desc">{{ stats.blocked_count }} blocked, {{ stats.failed_count }} invalid</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Sent (Live)</span>
+    <span class="stat-value" style="color:var(--success);">{{ stats.sent_success }}</span>
+    <span class="stat-desc">Confirmed deliveries</span>
+  </div>
+</div>
+
+{% if not stats.has_data %}
+<!-- Empty State (No emojis, developer-focused) -->
+<div class="card empty-state">
+  <div style="width:40px; height:40px; border-radius:var(--radius-sm); background:var(--bg-subtle); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 1rem auto;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+  </div>
+  <h2 class="empty-title">No outreach data found</h2>
+  <p class="empty-desc">
+    No campaigns or contacts have been processed yet. Upload a CSV file to begin research, domain verification, and draft generation.
+  </p>
+  <a href="{{ url_for('import_contacts_page') }}" class="btn btn-primary" style="margin-top:0.75rem;">
+    Import contact batch
+  </a>
+</div>
+{% else %}
+<!-- Single Readable Primary Card with Resend-Style View Tabs -->
+<div class="card tabs-wrapper" style="width:100%;">
+  <div class="card-header" style="align-items: center;">
+    <div class="tabs" style="border-bottom: none; margin-bottom: 0;">
+      <button type="button" class="tab-btn active" data-tab="tab-drafts" id="tabBtnDrafts">
+        Recent Outreach Drafts ({{ stats.drafts_created }})
+      </button>
+      <button type="button" class="tab-btn" data-tab="tab-batches" id="tabBtnBatches">
+        Batch Campaigns ({{ stats.recent_batches|length }})
+      </button>
+    </div>
+
+    <div class="header-actions">
+      <a href="{{ url_for('review_queue') }}" class="btn btn-secondary btn-sm">
+        Full review queue
+      </a>
+      <a href="{{ url_for('import_contacts_page') }}" class="btn btn-secondary btn-sm">
+        New batch
+      </a>
+    </div>
+  </div>
+
+  <!-- Tab 1: Primary Unified Outreach Drafts Table -->
+  <div id="tab-drafts" class="tab-pane">
+    {% if stats.recent_drafts %}
+      <div class="table-responsive">
+        <table class="table-main">
+          <thead>
+            <tr>
+              <th style="min-width: 220px;">Recipient &amp; Contact</th>
+              <th style="min-width: 140px;">Company</th>
+              <th style="min-width: 220px;">Subject Line</th>
+              <th style="min-width: 110px;">Status</th>
+              <th style="min-width: 100px;">Mode</th>
+              <th style="min-width: 120px;">Created</th>
+              <th style="min-width: 90px; text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for d in stats.recent_drafts %}
+              <tr>
+                <td>
+                  <strong class="cell-email" title="{{ d.recipient }}">{{ d.recipient }}</strong>
+                  <div class="cell-subtext">{{ d.recipient_name or '—' }}</div>
+                </td>
+                <td>
+                  <div class="cell-company">{{ d.company_name or '—' }}</div>
+                </td>
+                <td>
+                  <div class="cell-subject" title="{{ d.subject }}">{{ d.subject }}</div>
+                </td>
+                <td>
+                  {% if d.status == 'APPROVED' %}
+                    <span class="badge badge-success"><span class="badge-dot"></span>Approved</span>
+                  {% elif d.status == 'SENT' %}
+                    <span class="badge badge-info"><span class="badge-dot"></span>Sent</span>
+                  {% elif d.status == 'REJECTED' %}
+                    <span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>
+                  {% elif d.review_required %}
+                    <span class="badge badge-warning"><span class="badge-dot"></span>Review</span>
+                  {% else %}
+                    <span class="badge badge-neutral"><span class="badge-dot"></span>Draft</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <span class="badge-mode">
+                    {{ 'Uploaded CV' if d.mode == 'uploaded_cv' else 'Tailored CV' }}
+                  </span>
+                </td>
+                <td>
+                  <span class="cell-date">
+                    {{ d.created_at[:16].replace('T', ' ') if d.created_at else '—' }}
+                  </span>
+                </td>
+                <td style="text-align: right;">
+                  <a href="{{ url_for('view_draft', draft_id=d.draft_id) }}" class="btn btn-secondary btn-sm">
+                    Review
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div style="padding: 3rem 1.5rem; text-align: center; color: var(--text-dim); font-size:13px;">
+        No drafts currently found. Process a batch of contacts to generate outreach emails.
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Tab 2: Full-Width Batch History Table -->
+  <div id="tab-batches" class="tab-pane" style="display: none;">
+    {% if stats.recent_batches %}
+      <div class="table-responsive">
+        <table class="table-main">
+          <thead>
+            <tr>
+              <th style="min-width: 220px;">Campaign / Batch ID</th>
+              <th style="min-width: 140px;">Target Role</th>
+              <th style="min-width: 80px;">Rows</th>
+              <th style="min-width: 80px;">Drafts</th>
+              <th style="min-width: 90px;">Review</th>
+              <th style="min-width: 120px;">Status</th>
+              <th style="min-width: 110px; text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in stats.recent_batches %}
+              <tr>
+                <td>
+                  <strong class="cell-email">{{ b.campaign_id or b.batch_id[:12] }}</strong>
+                  <div class="cell-subtext font-mono" style="font-size:11px;">
+                    {{ b.saved_at[:16].replace('T', ' ') if b.saved_at else '' }}
+                  </div>
+                </td>
+                <td>
+                  <div style="font-size:13px; color:var(--text-primary);">{{ b.target_role or 'AI/ML Intern' }}</div>
+                  <div class="cell-subtext font-mono">{{ b.mode }}</div>
+                </td>
+                <td style="font-family:var(--font-mono); color:var(--text-secondary);">{{ b.total_rows }}</td>
+                <td style="font-family:var(--font-mono); color:var(--text-primary); font-weight:600;">{{ b.drafted_count }}</td>
+                <td style="font-family:var(--font-mono); color:var(--warning);">{{ b.review_required_count }}</td>
+                <td>
+                  {% if b.failed_count > 0 or b.blocked_count > 0 %}
+                    <span class="badge badge-warning"><span class="badge-dot"></span>Partial Issues</span>
+                  {% else %}
+                    <span class="badge badge-success"><span class="badge-dot"></span>Completed</span>
+                  {% endif %}
+                </td>
+                <td style="text-align: right;">
+                  <a href="{{ url_for('view_batch_result', batch_id=b.batch_id) }}" class="btn btn-secondary btn-sm">
+                    View Details
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div style="padding: 3rem 1.5rem; text-align: center; color: var(--text-dim); font-size:13px;">
+        No batch history recorded in output/.batches.
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  // Handle tab switching from header button or hash
+  document.getElementById("headerBatchBtn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    document.getElementById("tabBtnBatches")?.click();
+    document.getElementById("tab-batches")?.scrollIntoView({ behavior: "smooth" });
+  });
+
+  if (window.location.hash === "#batches") {
+    document.getElementById("tabBtnBatches")?.click();
+  }
+</script>
+{% endif %}
+{% endblock %}

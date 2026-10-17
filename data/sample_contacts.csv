@@ -1,0 +1,9 @@
+company_name,contact_name,email,website,role_or_job_url,source_url,notes
+Fable Technologies,Alice Mercer,alice.mercer@fabletech.example,https://fabletech.example,https://fabletech.example/jobs/swe-intern,https://linkedin.com/jobs/12345,Met at university career fair 2024
+Quill Analytics,,recruitment@quillanalytics.example,https://quillanalytics.example,Software Engineering Intern,https://quillanalytics.example/careers,No specific contact — general recruitment inbox
+Prism Robotics,Bob Nakamura,b.nakamura@prismrobotics.example,https://prismrobotics.example,,https://twitter.com/prisminternships,Found via Twitter; apply through website
+Vertex Fintech,Hiring Team,careers@jobs.vertexfintech.example,https://vertexfintech.example,ML Intern 2025,,Subdomain recruiter — still a valid company contact
+Orbit Labs,,internships@gmail.com,,,,Free provider — employer identity unknown; probably a small startup
+Cascade Systems,Carol Osei,  Carol Osei <c.osei@cascadesystems.example>  ,https://cascadesystems.example,Platform Engineering Intern,https://cascadesystems.example/careers,Display-name format
+Fable Technologies,Dan Park,dan.park@fabletech.example,https://fabletech.example,Backend Intern,,Second contact at Fable — different person same company
+,Eve Sato,e.sato@apexsolutions.example,,,, No company name — contact still importable

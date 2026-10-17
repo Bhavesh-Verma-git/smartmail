@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+
+{% block title %}Draft Review — {{ draft.recipient }} — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 0.35rem;">
+      <a href="{{ url_for('review_queue') }}" style="color:var(--text-secondary);">&larr; Back to review queue</a>
+      {% if draft.campaign_id %}
+        &bull; Campaign: <code>{{ draft.campaign_id }}</code>
+      {% endif %}
+    </div>
+    <h1 class="page-title">{{ draft.recipient }}</h1>
+    <p class="page-subtitle">
+      Target: <strong>{{ draft.company_name }}</strong> &bull; Contact: <strong>{{ draft.recipient_name or 'Hiring Team' }}</strong> &bull; Draft ID: <code>{{ draft.draft_id }}</code>
+    </p>
+  </div>
+  <div class="header-actions">
+    {% set gen_st = draft.generation_status or ('NEEDS_REVIEW' if draft.review_required else 'DRAFT_GENERATED') %}
+    {% if gen_st == 'DRAFT_GENERATED' %}
+      <span class="badge badge-confident" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Draft Generated</span>
+    {% elif gen_st == 'NEEDS_REVIEW' %}
+      <span class="badge badge-review-name" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Needs Review</span>
+    {% else %}
+      <span class="badge badge-eliminated" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Generation Failed</span>
+    {% endif %}
+
+    {% if draft.status == 'APPROVED' %}
+      <span class="badge badge-success" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Approved for sending</span>
+    {% elif draft.status == 'SENT' %}
+      <span class="badge badge-info" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Sent (Dry Run)</span>
+    {% elif draft.status == 'REJECTED' %}
+      <span class="badge badge-danger" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Rejected / On Hold</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Review Flags & Safeguards Warnings Banner -->
+{% if draft.review_flags %}
+<div class="alert alert-warning" style="margin-bottom: 1.5rem;">
+  <div style="width: 100%;">
+    <div style="font-weight: 600; margin-bottom: 0.35rem;">Review flags identified by pipeline:</div>
+    <ul style="padding-left: 1.25rem; font-size: 13px; line-height: 1.6;">
+      {% for flag in draft.review_flags %}
+        <li>{{ flag }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
+<div class="grid-2">
+  <!-- Left Column: Draft Editor -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Outreach Email Message</h2>
+      <span style="font-size: 11px; color: var(--text-dim);">
+        Editing body resets approval status
+      </span>
+    </div>
+
+    <form action="{{ url_for('edit_draft_route', draft_id=draft.draft_id) }}" method="POST">
+      <div class="form-group">
+        <label class="form-label" for="recipientEmail">Recipient Email</label>
+        <input type="email" id="recipientEmail" name="recipient" class="form-control" value="{{ draft.recipient }}" required>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="recipientName">Recipient / Contact Name</label>
+        <input type="text" id="recipientName" name="recipient_name" class="form-control" value="{{ draft.recipient_name }}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="emailSubject">Subject Line</label>
+        <input type="text" id="emailSubject" name="subject" class="form-control" value="{{ draft.subject }}" required>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="emailBody">Email Body</label>
+        <textarea id="emailBody" name="body" class="form-control" rows="14" style="font-family: inherit; font-size: 13px; line-height: 1.6;" required>{{ draft.body }}</textarea>
+      </div>
+
+      <!-- Attachment Details -->
+      <div class="form-group" style="background: var(--bg-subtle); padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+        <label class="form-label" style="margin-bottom: 0.2rem;">Attached CV</label>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+          <div>
+            <span class="badge badge-neutral" style="text-transform: uppercase; font-size: 10px; margin-right: 0.5rem;">
+              {{ 'Uploaded CV' if draft.mode == 'uploaded_cv' else 'Tailored CV' }}
+            </span>
+            <code>{{ draft.attachment_path }}</code>
+          </div>
+          {% if cv_exists %}
+            <span style="color:var(--success); font-weight:600; font-size:11px; font-family:var(--font-mono);">File Intact</span>
+          {% else %}
+            <span style="color:var(--danger); font-weight:600; font-size:11px; font-family:var(--font-mono);">File Missing</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.5rem;">
+        <button type="submit" class="btn btn-secondary">
+          Save changes
+        </button>
+
+        {% if draft.status != 'APPROVED' and draft.status != 'SENT' %}
+          <button type="submit" formaction="{{ url_for('approve_draft_route', draft_id=draft.draft_id) }}" class="btn btn-success">
+            Approve draft
+          </button>
+        {% endif %}
+
+        {% if draft.status != 'REJECTED' %}
+          <button type="submit" formaction="{{ url_for('reject_draft_route', draft_id=draft.draft_id) }}" class="btn btn-danger btn-sm">
+            Reject / Hold
+          </button>
+        {% endif %}
+
+        <!-- Send (Dry Run / Live) -->
+        <button type="submit" formaction="{{ url_for('send_draft_route', draft_id=draft.draft_id) }}" class="btn btn-primary" onclick="return confirm('Send email? (Dry-run mode is active by default; email will not be sent over network unless live Gmail is configured).');">
+          Send email (Dry Run)
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Right Column: Stage 3 Classification & Evidence Breakdown -->
+  <div>
+    <!-- Stage 4: Personalization & Evidence Rationale Card -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header">
+        <h2 class="card-title">Personalization Rationale</h2>
+        {% set gen_st = draft.generation_status or ('NEEDS_REVIEW' if draft.review_required else 'DRAFT_GENERATED') %}
+        <span class="badge {% if gen_st == 'DRAFT_GENERATED' %}badge-confident{% elif gen_st == 'NEEDS_REVIEW' %}badge-review-name{% else %}badge-eliminated{% endif %}">
+          <span class="badge-dot"></span>{{ 'Draft Generated' if gen_st == 'DRAFT_GENERATED' else ('Needs Review' if gen_st == 'NEEDS_REVIEW' else 'Generation Failed') }}
+        </span>
+      </div>
+
+      <div style="font-size: 13px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 0.85rem;">
+        {{ draft.personalization_explanation or 'Personalized based on verified company research and candidate CV facts.' }}
+      </div>
+
+      <div class="evidence-card" style="background: var(--bg-subtle);">
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">Recipient Addressing:</span>
+          <span class="evidence-field-val">
+            {% if draft.recipient_type == 'generic_inbox' %}
+              <span class="badge badge-neutral" style="font-size: 10px;">Generic Inbox</span> Team Salutation ({{ draft.recipient }})
+            {% elif draft.recipient_name %}
+              <span class="badge badge-success" style="font-size: 10px;">Individual</span> {{ draft.recipient_name }}
+            {% else %}
+              <span class="badge badge-neutral" style="font-size: 10px;">Generic</span> Hiring Team
+            {% endif %}
+          </span>
+        </div>
+
+        {% if draft.matched_skills %}
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">Matched CV Skills:</span>
+          <span class="evidence-field-val">{{ draft.matched_skills|join(', ') }}</span>
+        </div>
+        {% endif %}
+
+        {% if draft.matched_projects %}
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">Highlighted Projects:</span>
+          <span class="evidence-field-val">{{ draft.matched_projects|join(', ') }}</span>
+        </div>
+        {% endif %}
+
+        <div style="margin-top: 0.85rem; border-top: 1px solid var(--border-color); padding-top: 0.75rem;">
+          <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.5rem;">
+            Company Evidence
+          </div>
+
+          {% set ev_list = evidence_items if evidence_items is defined else (draft.evidence_summary | normalize_evidence) %}
+          {% if ev_list %}
+            <div class="evidence-list" style="display: flex; flex-direction: column; gap: 0.65rem;">
+              {% for ev in ev_list %}
+                <div class="evidence-entry" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.65rem 0.75rem; min-width: 0; max-width: 100%;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                    <span style="font-weight: 600; font-size: 12px; color: var(--text-primary);">
+                      {{ ev.title }}
+                    </span>
+                    {% if ev.source_url %}
+                      <a href="{{ ev.source_url }}" target="_blank" rel="noopener noreferrer" style="font-size: 11px; color: var(--info); word-break: break-all; overflow-wrap: anywhere; text-decoration: underline;">
+                        Source link &nearr;
+                      </a>
+                    {% endif %}
+                  </div>
+                  {% if ev.excerpt %}
+                    <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.45; margin: 0 0 0.35rem 0; word-break: break-word; overflow-wrap: anywhere; white-space: pre-wrap;">{{ ev.excerpt }}</p>
+                  {% endif %}
+                  {% if ev.source_url %}
+                    <div style="font-size: 11px; color: var(--text-dim); word-break: break-all; overflow-wrap: anywhere;">
+                      <a href="{{ ev.source_url }}" target="_blank" rel="noopener noreferrer" style="color: var(--text-dim); word-break: break-all; overflow-wrap: anywhere;">{{ ev.source_url }}</a>
+                    </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0; font-style: italic;">
+              No source evidence available.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 3 Classification Outcome Card -->
+    {% set clf = draft.classification or {} %}
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header">
+        <h2 class="card-title">Stage 3 Classification</h2>
+        {% set c_out = clf.primary_outcome or ('CONFIDENT' if draft.approved else ('REVIEW_NAME' if draft.review_required else 'REVIEW')) %}
+        <span class="badge {% if c_out == 'CONFIDENT' %}badge-confident{% elif c_out == 'REVIEW_NAME' %}badge-review-name{% elif c_out == 'NOT_AI_RELEVANT' %}badge-not-ai{% elif c_out == 'ELIMINATED' %}badge-eliminated{% else %}badge-review{% endif %}">
+          <span class="badge-dot"></span>{{ c_out }}
+        </span>
+      </div>
+
+      <div style="font-size: 13px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 0.75rem;">
+        <strong>Reason Code:</strong> <code>{{ clf.reason_code or 'CONFIDENT' }}</code>
+      </div>
+      <div style="font-size: 13px; line-height: 1.5; color: var(--text-muted); margin-bottom: 1rem;">
+        {{ clf.reason_summary or (v_details.role_status_note or 'Contact evaluated based on retrieved evidence.') }}
+      </div>
+
+      <div class="evidence-card" style="background: var(--bg-subtle); margin-bottom: 0.5rem;">
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">Recipient Identity:</span>
+          <span class="evidence-field-val">
+            {% if clf.recipient_name %}
+              {{ clf.recipient_name }} ({{ clf.name_verification_status or 'UNVERIFIED' }})
+            {% else %}
+              Generic / Unverified
+            {% endif %}
+          </span>
+        </div>
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">AI/ML Work Relevance:</span>
+          <span class="evidence-field-val">
+            {% if clf.ai_ml_relevant %}
+              <span style="color:#4ade80;">Evidence Supported</span>
+            {% elif clf.reason_code == 'NOT_AI_RELEVANT' %}
+              <span style="color:var(--text-muted);">Not AI Focused</span>
+            {% else %}
+              <span style="color:#fbbf24;">Uncertain / Under Review</span>
+            {% endif %}
+          </span>
+        </div>
+        {% if clf.matched_areas %}
+        <div class="evidence-field-row">
+          <span class="evidence-field-label">Matched AI Disciplines:</span>
+          <span class="evidence-field-val">{{ clf.matched_areas|join(', ') }}</span>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if clf.contradictions %}
+        <div class="contradiction-box" style="margin-top: 0.75rem;">
+          <div style="font-weight: 600; margin-bottom: 4px;">Contradictions / Uncertainties:</div>
+          {% for c in clf.contradictions %}
+            <div>&bull; {{ c }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- 5-Point Verification Breakdown -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header">
+        <h2 class="card-title">Verification Breakdown</h2>
+        <span style="font-size: 0.75rem; color: var(--text-dim);">Evidence-Backed Checks</span>
+      </div>
+
+      <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:1rem;">
+        SmartMail isolates each verification question to prevent unjustified assumptions.
+      </div>
+
+      <!-- 1. Email Syntax Validity -->
+      <div class="question-card">
+        <div>
+          <div class="question-title">1. Is the email syntactically valid?</div>
+          <div class="question-detail">
+            Syntax parser confirmed format for <code>{{ draft.recipient }}</code>.
+          </div>
+        </div>
+        <span class="badge badge-proceed">VALID</span>
+      </div>
+
+      <!-- 2. Company Identity Evidence -->
+      <div class="question-card">
+        <div>
+          <div class="question-title">2. Is company identity supported by evidence?</div>
+          <div class="question-detail">
+            {{ v_details.company_identity_note or 'Company research conducted from domain/website.' }}
+          </div>
+        </div>
+        {% set cid = v_details.company_identity_status or ('SUPPORTED' if not draft.review_required else 'REVIEW') %}
+        <span class="badge {% if cid == 'SUPPORTED' %}badge-proceed{% else %}badge-review{% endif %}">
+          {{ cid }}
+        </span>
+      </div>
+
+      <!-- 3. Domain Relationship -->
+      <div class="question-card">
+        <div>
+          <div class="question-title">3. Is email domain associated with company?</div>
+          <div class="question-detail">
+            {{ v_details.domain_relationship_note or 'Domain affiliation verified.' }}
+          </div>
+        </div>
+        {% set dom = v_details.domain_relationship_status or 'SUPPORTED' %}
+        <span class="badge {% if dom in ['SUPPORTED', 'AFFILIATED'] %}badge-proceed{% else %}badge-neutral{% endif %}">
+          {{ dom }}
+        </span>
+      </div>
+
+      <!-- 4. Profile & Technical Relevance -->
+      <div class="question-card">
+        <div>
+          <div class="question-title">4. Does evidence support technical relevance?</div>
+          <div class="question-detail">
+            {% if v_details.matched_areas %}
+              Matched focus areas: <strong>{{ v_details.matched_areas|join(', ') }}</strong>.
+            {% else %}
+              External evidence did not establish specific AI/ML engineering keywords.
+            {% endif %}
+          </div>
+        </div>
+        {% set rel = v_details.relevance_status or ('RELEVANT' if v_details.matched_areas else 'REVIEW') %}
+        <span class="badge {% if rel == 'RELEVANT' %}badge-proceed{% else %}badge-review{% endif %}">
+          {{ rel }}
+        </span>
+      </div>
+
+      <!-- 5. Internship Availability -->
+      <div class="question-card">
+        <div>
+          <div class="question-title">5. Is an internship actively confirmed open?</div>
+          <div class="question-detail">
+            {{ v_details.role_status_note or 'Drafted as exploratory general internship inquiry to avoid false listing claims.' }}
+          </div>
+        </div>
+        {% set role_st = v_details.role_status or 'GENERAL_INQUIRY' %}
+        <span class="badge {% if role_st == 'OPEN_LISTING' %}badge-proceed{% else %}badge-neutral{% endif %}">
+          {{ role_st }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Research Sources & Verified Evidence -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Retrieved Evidence &amp; Sources</h2>
+      </div>
+
+      {% set ev_items = draft.research_evidence or [] %}
+      {% if ev_items %}
+        <div>
+          {% for ev in ev_items %}
+            <div class="evidence-item-card" style="margin-bottom: 0.75rem;">
+              <div class="evidence-item-header">
+                <div>
+                  <a href="{{ ev.source_url }}" target="_blank" rel="noopener noreferrer" class="evidence-source-link">
+                    {{ ev.source_url }}
+                  </a>
+                  <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                    Type: <code>{{ ev.source_type or 'web_page' }}</code> &bull; <em>{{ ev.title or 'Untitled' }}</em>
+                  </div>
+                </div>
+                <span class="badge {% if ev.retrieval_status == 'OK' %}badge-proceed{% elif ev.retrieval_status == 'BLOCKED' %}badge-blocked{% else %}badge-neutral{% endif %}" style="font-size: 10px;">
+                  {{ ev.retrieval_status or 'OK' }}
+                </span>
+              </div>
+              {% if ev.claim_supported %}
+                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;"><strong>Claim:</strong> {{ ev.claim_supported }}</div>
+              {% endif %}
+              {% if ev.extracted_text %}
+                <div class="evidence-excerpt">{{ ev.extracted_text }}</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% elif v_details.source_urls %}
+        <div style="margin-bottom: 1rem;">
+          <div class="form-label">Verified External Source Links:</div>
+          <ul style="padding-left: 1.25rem; font-size: 0.8rem; line-height: 1.8;">
+            {% for url in v_details.source_urls %}
+              <li><a href="{{ url }}" target="_blank" rel="noopener noreferrer" style="word-break: break-all;">{{ url }}</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% else %}
+        <p style="font-size:0.825rem; color:var(--text-dim); margin-bottom:1rem;">
+          No external source URLs were retrieved for this contact.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}SmartMail{% endblock %} — Outreach Console</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Mobile Topbar -->
+    <header class="mobile-topbar">
+      <div class="brand-row">
+        <div class="brand-logo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f4f4f5" stroke-width="2.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        </div>
+        <span class="brand-name">SmartMail</span>
+      </div>
+      <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Toggle navigation">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </header>
+
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="sidebar">
+      <div>
+        <div class="sidebar-header">
+          <a href="{{ url_for('dashboard') }}" class="brand-row">
+            <div class="brand-logo">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f4f4f5" stroke-width="2.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            </div>
+            <span class="brand-name">SmartMail</span>
+            <span class="brand-badge">local</span>
+          </a>
+        </div>
+
+        <nav>
+          <ul class="sidebar-nav">
+            <li>
+              <a href="{{ url_for('dashboard') }}" class="sidebar-link {% if active_tab == 'dashboard' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                <span>Dashboard</span>
+              </a>
+            </li>
+            <li>
+              <a href="{{ url_for('import_contacts_page') }}" class="sidebar-link {% if active_tab == 'import' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span>Import &amp; Batch</span>
+              </a>
+            </li>
+            <li>
+              <a href="{{ url_for('review_queue') }}" class="sidebar-link {% if active_tab == 'review' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                <span>Review Queue</span>
+              </a>
+            </li>
+            <li>
+              <a href="{{ url_for('cv_settings') }}" class="sidebar-link {% if active_tab == 'cv' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                <span>CV Settings</span>
+              </a>
+            </li>
+            <li>
+              <a href="{{ url_for('view_send_log') }}" class="sidebar-link {% if active_tab == 'send_log' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                <span>Send Log</span>
+              </a>
+            </li>
+            <li>
+              <a href="{{ url_for('launch_checklist') }}" class="sidebar-link {% if active_tab == 'checklist' %}active{% endif %}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>Safety &amp; Launch</span>
+              </a>
+            </li>
+          </ul>
+        </nav>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="safety-pill">
+          <span class="safety-dot"></span>
+          <span>DRY RUN: SAFE</span>
+        </div>
+        <div class="safety-note">
+          Loopback testing console. Live SMTP transmission disabled.
+        </div>
+      </div>
+    </aside>
+
+    <!-- App Main Area -->
+    <div class="app-main">
+      <main class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category if category in ['success', 'warning', 'danger', 'info'] else 'info' }}">
+                <span>{{ message }}</span>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+
+        <footer class="app-footer">
+          <div>
+            <strong>SmartMail Local Testing Console</strong> &bull; Loopback Bound (127.0.0.1)
+          </div>
+          <div>
+            Duplicate-Send Safeguards: <span style="color:var(--success); font-family:var(--font-mono); font-weight:600;">ACTIVE</span>
+          </div>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

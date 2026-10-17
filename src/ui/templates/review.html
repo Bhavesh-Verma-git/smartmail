@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Review Queue — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Review Queue</h1>
+    <p class="page-subtitle">Inspect, edit, and approve outreach drafts before transmission. Human-in-the-loop safeguards are active.</p>
+  </div>
+  <div class="header-actions">
+    <a href="{{ url_for('import_contacts_page') }}" class="btn btn-secondary btn-sm">Import contacts</a>
+  </div>
+</div>
+
+<!-- Status Filters -->
+<div class="tabs" style="margin-bottom: 1.5rem;">
+  <a href="{{ url_for('review_queue') }}" class="tab-btn {% if not current_filter %}active{% endif %}">
+    All drafts ({{ total_count }})
+  </a>
+  <a href="{{ url_for('review_queue', status='NEEDS_REVIEW') }}" class="tab-btn {% if current_filter == 'NEEDS_REVIEW' %}active{% endif %}">
+    Needs review ({{ needs_review_count }})
+  </a>
+  <a href="{{ url_for('review_queue', status='DRAFT') }}" class="tab-btn {% if current_filter == 'DRAFT' %}active{% endif %}">
+    Pending approval
+  </a>
+  <a href="{{ url_for('review_queue', status='APPROVED') }}" class="tab-btn {% if current_filter == 'APPROVED' %}active{% endif %}">
+    Approved
+  </a>
+  <a href="{{ url_for('review_queue', status='SENT') }}" class="tab-btn {% if current_filter == 'SENT' %}active{% endif %}">
+    Sent (Dry Run)
+  </a>
+  <a href="{{ url_for('review_queue', status='REJECTED') }}" class="tab-btn {% if current_filter == 'REJECTED' %}active{% endif %}">
+    Rejected / Held
+  </a>
+</div>
+
+{% if not drafts %}
+<div class="card empty-state">
+  <div style="width:36px; height:36px; border-radius:var(--radius-sm); background:var(--bg-subtle); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem auto;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+  </div>
+  <h2 class="empty-title">No drafts match filter</h2>
+  <p class="empty-desc">
+    There are currently no drafts matching the selected filter criteria.
+  </p>
+  <a href="{{ url_for('review_queue') }}" class="btn btn-secondary btn-sm" style="margin-top:0.5rem;">View all drafts</a>
+</div>
+{% else %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table-main">
+      <thead>
+        <tr>
+          <th style="min-width: 220px;">Recipient &amp; Company</th>
+          <th style="min-width: 220px;">Subject Line</th>
+          <th style="min-width: 100px;">CV Mode</th>
+          <th style="min-width: 240px;">Review Flags &amp; Uncertainty</th>
+          <th style="min-width: 110px;">Status</th>
+          <th style="min-width: 90px; text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in drafts %}
+          <tr>
+            <td>
+              <strong class="cell-email" title="{{ d.recipient }}">{{ d.recipient }}</strong>
+              <div class="cell-subtext">
+                {{ d.company_name or '—' }} &bull; {{ d.recipient_name or 'No contact name' }}
+              </div>
+            </td>
+            <td>
+              <div class="cell-subject" title="{{ d.subject }}">{{ d.subject }}</div>
+            </td>
+            <td>
+              <span class="badge-mode">
+                {{ 'Uploaded CV' if d.mode == 'uploaded_cv' else 'Tailored CV' }}
+              </span>
+            </td>
+            <td>
+              {% if d.review_flags %}
+                <div style="font-size: 12px; color: var(--warning); line-height: 1.4; word-break: break-word;">
+                  {{ d.review_flags[0] }}
+                  {% if d.review_flags|length > 1 %}
+                    <span style="color:var(--text-dim);"> (+{{ d.review_flags|length - 1 }} more)</span>
+                  {% endif %}
+                </div>
+              {% else %}
+                <span style="font-size: 11px; color: var(--success); font-family:var(--font-mono);">No flags</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if d.status == 'APPROVED' %}
+                <span class="badge badge-success"><span class="badge-dot"></span>Approved</span>
+              {% elif d.status == 'SENT' %}
+                <span class="badge badge-info"><span class="badge-dot"></span>Sent</span>
+              {% elif d.status == 'REJECTED' %}
+                <span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>
+              {% elif d.review_required %}
+                <span class="badge badge-warning"><span class="badge-dot"></span>Review</span>
+              {% else %}
+                <span class="badge badge-neutral"><span class="badge-dot"></span>Draft</span>
+              {% endif %}
+            </td>
+            <td style="text-align: right;">
+              <a href="{{ url_for('view_draft', draft_id=d.draft_id) }}" class="btn btn-secondary btn-sm">
+                Review
+              </a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

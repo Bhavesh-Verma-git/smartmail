@@ -1,0 +1,926 @@
+{% extends "base.html" %}
+
+{% block title %}New Campaign — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Outreach Campaign Wizard</h1>
+    <p class="page-subtitle">CV-First outreach preparation: Upload CV &rarr; Upload Contacts &rarr; Map Columns &rarr; Confirm.</p>
+  </div>
+</div>
+
+<!-- Wizard Step Navigation -->
+<div class="wizard-header">
+  <ul class="wizard-steps" id="wizardStepper">
+    <li class="wizard-step active" id="stepIndicator1">
+      <span class="wizard-step-num">1</span>
+      <span>Master CV</span>
+    </li>
+    <li class="wizard-separator">&rarr;</li>
+    <li class="wizard-step" id="stepIndicator2">
+      <span class="wizard-step-num">2</span>
+      <span>Contacts Spreadsheet</span>
+    </li>
+    <li class="wizard-separator">&rarr;</li>
+    <li class="wizard-step" id="stepIndicator3">
+      <span class="wizard-step-num">3</span>
+      <span>Column Mapping &amp; Preview</span>
+    </li>
+    <li class="wizard-separator">&rarr;</li>
+    <li class="wizard-step" id="stepIndicator4">
+      <span class="wizard-step-num">4</span>
+      <span>Confirm &amp; Run</span>
+    </li>
+  </ul>
+</div>
+
+<!-- ======================================================================= -->
+<!-- STEP 1: Upload CV                                                       -->
+<!-- ======================================================================= -->
+<div class="wizard-pane active" id="stepPane1">
+  <div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div class="card-header">
+      <h2 class="card-title">Step 1: Upload Your Master Curriculum Vitae (CV)</h2>
+      <span style="font-size: 11px; font-family: var(--font-mono); color: var(--text-dim);">PDF &bull; Max 10 MB</span>
+    </div>
+
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.5;">
+      SmartMail operates CV-first. Upload your master CV document (PDF format) to anchor technical relevance verification and email drafting. In <strong>Uploaded CV Mode</strong>, your document remains byte-for-byte unchanged and is attached directly to outreach emails.
+    </p>
+
+    <!-- Registered CV Display (If exists) -->
+    <div id="registeredCvContainer" {% if not (registered_cv and registered_cv.exists) %}style="display:none;"{% endif %}>
+      <div class="cv-info-card">
+        <div class="cv-info-main">
+          <div class="cv-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <div>
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+              <strong id="registeredCvName" style="color:var(--text-primary); font-size:14px;">{{ registered_cv.filename if registered_cv else '' }}</strong>
+              <span class="badge badge-success"><span class="badge-dot"></span>Verified PDF</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono); margin-top:2px;">
+              Size: <span id="registeredCvSize">{{ registered_cv.size_formatted if registered_cv else '' }}</span> &bull; SHA-256: <span id="registeredCvSha">{{ ((registered_cv.sha256 if registered_cv else '') or '')[:16] }}...</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <button type="button" class="btn btn-secondary btn-sm" id="btnReplaceCv">Replace CV</button>
+          <button type="button" class="btn btn-danger btn-sm" id="btnClearCv">Remove</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top:1.5rem;">
+        <button type="button" class="btn btn-primary btn-lg" id="btnContinueStep1">
+          Continue to Step 2: Upload Contacts &rarr;
+        </button>
+      </div>
+    </div>
+
+    <!-- CV Upload Dropzone -->
+    <div id="cvUploadSection" {% if registered_cv and registered_cv.exists %}style="display:none;"{% endif %}>
+      <div class="dropzone" id="cvDropzone">
+        <div style="width:40px; height:40px; border-radius:var(--radius-sm); background:var(--bg-card); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem auto;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
+        </div>
+        <div class="dropzone-text">Click to choose or drag &amp; drop your CV PDF</div>
+        <div class="dropzone-sub">Standard PDF documents only &bull; Up to 10 MB</div>
+        <div id="cvUploadStatus" style="margin-top:0.75rem; font-size:12px; font-weight:500;"></div>
+      </div>
+      <input type="file" id="cvFileInput" accept=".pdf,application/pdf" style="display:none;">
+
+      <div id="cvErrorAlert" class="alert alert-danger" style="display:none; margin-top:1rem;">
+        <span id="cvErrorMsg"></span>
+      </div>
+
+      <div class="alert alert-info" style="margin-top: 1.5rem;">
+        <div>
+          <strong>Privacy &amp; Controlled Storage:</strong>
+          <div style="margin-top: 2px; font-size: 12px; color: var(--text-muted);">
+            Your CV is stored in a controlled local application directory (<code>output/uploaded_cvs/</code>) with a unique server-generated filename. It is never exposed via static web URLs or sent to external AI services during upload.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- STEP 2: Upload Contact Spreadsheet                                      -->
+<!-- ======================================================================= -->
+<div class="wizard-pane" id="stepPane2">
+  <div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div class="card-header">
+      <h2 class="card-title">Step 2: Upload Contact Spreadsheet</h2>
+      <span style="font-size: 11px; font-family: var(--font-mono); color: var(--text-dim);">.csv, .xlsx, .xls</span>
+    </div>
+
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.5;">
+      Upload your internship contact list. Supported formats include standard <strong>CSV</strong>, modern Excel <strong>(.xlsx)</strong>, and legacy Excel <strong>(.xls)</strong>. Source row order and row numbers are preserved exactly.
+    </p>
+
+    <!-- Spreadsheet Dropzone -->
+    <div class="dropzone" id="contactsDropzone">
+      <div style="width:40px; height:40px; border-radius:var(--radius-sm); background:var(--bg-card); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem auto;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="dropzone-text" id="contactsDropText">Click to choose or drag &amp; drop contact spreadsheet</div>
+      <div class="dropzone-sub">Supports .csv, .xlsx, and .xls spreadsheets with arbitrary rows</div>
+      <div id="contactsFileDetails" style="margin-top:0.75rem; font-size:12px; font-weight:500; font-family:var(--font-mono); color:var(--text-primary);"></div>
+    </div>
+    <input type="file" id="contactsFileInput" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none;">
+
+    <div id="contactsErrorAlert" class="alert alert-danger" style="display:none; margin-top:1rem;">
+      <span id="contactsErrorMsg"></span>
+    </div>
+
+    <!-- Worksheet Selector (for XLSX/XLS with multiple sheets) -->
+    <div class="form-group" id="sheetSelectGroup" style="display:none; margin-top:1.25rem;">
+      <label class="form-label" for="sheetSelect">Select Worksheet</label>
+      <select id="sheetSelect" class="form-select"></select>
+      <div class="form-help">This workbook has multiple sheets. Select which worksheet contains your contacts.</div>
+    </div>
+
+    <!-- Campaign Parameters -->
+    <div style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
+      <div class="form-group">
+        <label class="form-label" for="campaignId">Campaign Identifier</label>
+        <input type="text" id="campaignId" class="form-control" value="{{ default_campaign_id }}" placeholder="e.g. pilot_october_internships">
+        <div class="form-help">Groups outreach drafts and isolates duplicate-send safeguards in SQLite.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="targetRole">Target Internship Role</label>
+        <input type="text" id="targetRole" class="form-control" value="AI/ML Intern" placeholder="e.g. AI/ML Intern, Data Science Intern">
+        <div class="form-help">Used for role relevance verification and draft personalization.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Workflow Mode</label>
+        <div class="mode-selector">
+          <div class="mode-card selected" id="modeCardUploaded" data-mode="uploaded_cv">
+            <div class="mode-title">Uploaded CV Mode</div>
+            <div class="mode-desc">Preserves your registered CV byte-for-byte. Recommended for real outreach.</div>
+          </div>
+          <div class="mode-card" id="modeCardTailored" data-mode="tailored_cv">
+            <div class="mode-title">Tailored CV Mode</div>
+            <div class="mode-desc">Selects relevant projects from master profile and generates a tailored PDF.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="jobDescription">Default Focus Notes / Job Description (Optional)</label>
+        <textarea id="jobDescription" class="form-control" rows="2" placeholder="Optional context notes or internship description if not provided per-row..."></textarea>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
+      <button type="button" class="btn btn-secondary" id="btnBackToStep1">&larr; Back to CV</button>
+      <button type="button" class="btn btn-primary btn-lg" id="btnContinueStep2" disabled>
+        Inspect &amp; Map Columns &rarr;
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- STEP 3: Column Mapping & Pre-Flight Validation Preview                  -->
+<!-- ======================================================================= -->
+<div class="wizard-pane" id="stepPane3">
+  <!-- Mapping Configuration Card -->
+  <div class="card" style="margin-bottom: 2rem;">
+    <div class="card-header">
+      <div>
+        <h2 class="card-title">Step 3: Column Mapping</h2>
+        <span style="font-size: 11px; color: var(--text-dim);" id="mappingFileMeta"></span>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshPreview">
+        Re-run Validation Preview
+      </button>
+    </div>
+
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 1.25rem;">
+      Verify how your spreadsheet headers correspond to SmartMail contact fields. Only <strong>Email</strong> is required; all other fields are optional and can remain unmapped without dropping contacts.
+    </p>
+
+    <div class="table-responsive">
+      <table class="mapping-table">
+        <thead>
+          <tr>
+            <th style="width: 220px;">SmartMail Target Field</th>
+            <th style="width: 260px;">Description</th>
+            <th style="width: 280px;">Spreadsheet Column</th>
+            <th>Mapping Status</th>
+          </tr>
+        </thead>
+        <tbody id="mappingTbody">
+          <!-- Dynamically populated -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pre-Flight Validation Summary Cards -->
+  <div class="card" style="margin-bottom: 2rem;">
+    <div class="card-header">
+      <h2 class="card-title">Pre-Flight Validation Diagnostics</h2>
+      <button type="button" class="btn btn-secondary btn-sm" id="btnDownloadReport">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Full Audit Report (CSV)
+      </button>
+    </div>
+
+    <!-- Mutually Exclusive Row Outcomes -->
+    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 0.5rem; font-family: var(--font-mono);">
+      Row Outcomes (Mutually Exclusive Breakdown)
+    </div>
+    <div class="validation-summary-grid">
+      <div class="val-stat-card" style="border-left: 3px solid var(--success);">
+        <span class="val-stat-label">Valid Contacts</span>
+        <span class="val-stat-val" id="valCountValid" style="color:var(--success);">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Will be processed</span>
+      </div>
+      <div class="val-stat-card" style="border-left: 3px solid var(--danger);">
+        <span class="val-stat-label">Syntax Errors</span>
+        <span class="val-stat-val" id="valCountSyntax" style="color:var(--danger);">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Malformed email format</span>
+      </div>
+      <div class="val-stat-card" style="border-left: 3px solid var(--danger);">
+        <span class="val-stat-label">Missing Emails</span>
+        <span class="val-stat-val" id="valCountMissing" style="color:var(--danger);">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Empty email field</span>
+      </div>
+      <div class="val-stat-card" style="border-left: 3px solid var(--warning);">
+        <span class="val-stat-label">Duplicates</span>
+        <span class="val-stat-val" id="valCountDuplicate" style="color:var(--warning);">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Repeated in file</span>
+      </div>
+    </div>
+
+    <!-- Informational Overlapping Checks -->
+    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 0.5rem; font-family: var(--font-mono);">
+      Data Quality Context (Informational / Overlapping)
+    </div>
+    <div class="validation-summary-grid">
+      <div class="val-stat-card">
+        <span class="val-stat-label">Missing Company</span>
+        <span class="val-stat-val" id="valCountNoCompany">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Preserved for research</span>
+      </div>
+      <div class="val-stat-card">
+        <span class="val-stat-label">Missing Name</span>
+        <span class="val-stat-val" id="valCountNoName">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Uses team greeting</span>
+      </div>
+      <div class="val-stat-card">
+        <span class="val-stat-label">Free Email Domains</span>
+        <span class="val-stat-val" id="valCountFreeProvider" style="color:var(--info);">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">gmail.com, etc.</span>
+      </div>
+      <div class="val-stat-card">
+        <span class="val-stat-label">Total Data Rows</span>
+        <span class="val-stat-val" id="valCountTotal">0</span>
+        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Excluding empty rows</span>
+      </div>
+    </div>
+
+    <div class="alert alert-info" style="margin-bottom:0;">
+      <div>
+        <strong>Validation Scope &amp; Integrity Notice:</strong>
+        <div style="font-size: 12px; margin-top: 3px; line-height: 1.4;">
+          A syntactically valid email is not proof that the mailbox exists or that the recruiter is currently active. Contacts with missing company names or recruiter names are <strong>not discarded</strong>; they remain available for review and automated research. Duplicate emails within the spreadsheet are skipped to protect outreach reputation.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row-by-Row Preview Table -->
+  <div class="card" style="margin-bottom: 2rem;">
+    <div class="card-header">
+      <h2 class="card-title">Row-by-Row Inspection Preview</h2>
+      <div style="display:flex; gap:0.4rem;">
+        <button type="button" class="btn btn-secondary btn-sm active" id="btnFilterAll" onclick="filterPreviewRows('ALL')">All Rows</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnFilterValid" onclick="filterPreviewRows('VALID')">Valid Only</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnFilterIssues" onclick="filterPreviewRows('ISSUES')">Issues / Skipped</button>
+      </div>
+    </div>
+
+    <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+      <table class="table-main" id="previewTable">
+        <thead>
+          <tr>
+            <th style="min-width: 60px;">Row #</th>
+            <th style="min-width: 220px;">Recipient Email</th>
+            <th style="min-width: 140px;">Contact Name</th>
+            <th style="min-width: 140px;">Company</th>
+            <th style="min-width: 140px;">Website</th>
+            <th style="min-width: 120px;">Status</th>
+            <th style="min-width: 240px;">Validation Reason</th>
+          </tr>
+        </thead>
+        <tbody id="previewTableBody">
+          <!-- Populated dynamically -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <button type="button" class="btn btn-secondary" id="btnBackToStep2">&larr; Back to Contacts File</button>
+    <button type="button" class="btn btn-primary btn-lg" id="btnContinueStep3">
+      Continue to Step 4: Confirmation &rarr;
+    </button>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- STEP 4: Confirmation & Launch                                           -->
+<!-- ======================================================================= -->
+<div class="wizard-pane" id="stepPane4">
+  <div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div class="card-header">
+      <h2 class="card-title">Step 4: Confirm Campaign Parameters</h2>
+      <span class="badge badge-success"><span class="badge-dot"></span>Safe Dry Run</span>
+    </div>
+
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.5;">
+      Review your configuration before initiating batch research. Once confirmed, SmartMail will begin domain verification, company research, and draft generation. <strong>No emails will be sent automatically.</strong>
+    </p>
+
+    <div style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:1.25rem; margin-bottom:1.5rem;">
+      <h3 style="font-size:13px; font-weight:600; color:var(--text-primary); margin-bottom:0.85rem;">Campaign Configuration Summary</h3>
+      <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:1rem; font-size:13px;">
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Registered Master CV</span>
+          <strong id="confirmCvFilename" style="color:var(--text-primary);">-</strong>
+          <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">Preserved byte-for-byte in Uploaded CV Mode</div>
+        </div>
+
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Contact Spreadsheet</span>
+          <strong id="confirmContactsFilename" style="color:var(--text-primary);">-</strong>
+          <div id="confirmSheetInfo" style="font-size:11px; color:var(--text-dim); margin-top:2px;">Sheet: Default</div>
+        </div>
+
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Target Internship Role</span>
+          <strong id="confirmTargetRole" style="color:var(--text-primary);">AI/ML Intern</strong>
+        </div>
+
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Campaign ID</span>
+          <code id="confirmCampaignId" class="font-mono" style="color:var(--text-secondary);">-</code>
+        </div>
+
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Contacts to Process</span>
+          <span id="confirmValidCountBadge" class="badge badge-success" style="font-size:13px;">0 Valid Contacts</span>
+        </div>
+
+        <div>
+          <span style="color:var(--text-muted); display:block; font-size:11px; text-transform:uppercase; font-family:var(--font-mono);">Skipped / Invalid Rows</span>
+          <span id="confirmSkippedCountBadge" class="badge badge-neutral" style="font-size:13px;">0 Skipped</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Production Email-Sending Safeguard Notice -->
+    <div class="card" style="border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.04); margin-bottom: 1.5rem;">
+      <div style="display:flex; align-items:flex-start; gap:0.75rem;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" style="flex-shrink:0; margin-top:2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <div style="font-size:12px; line-height:1.5;">
+          <strong style="color:#4ade80; display:block; font-size:13px; margin-bottom:2px;">Outreach Safeguards Active</strong>
+          Dry-run mode is strictly enforced. After batch processing completes, all generated drafts will be deposited in the <strong>Review Queue</strong> for mandatory human inspection and approval.
+        </div>
+      </div>
+    </div>
+
+    <!-- Final Launch Form -->
+    <form id="finalProcessForm" action="{{ url_for('process_batch_run') }}" method="POST">
+      <input type="hidden" name="file_token" id="formFileToken">
+      <input type="hidden" name="sheet_name" id="formSheetName">
+      <input type="hidden" name="mapping" id="formMappingJson">
+      <input type="hidden" name="target_role" id="formTargetRole">
+      <input type="hidden" name="campaign_id" id="formCampaignId">
+      <input type="hidden" name="workflow_mode" id="formWorkflowMode" value="uploaded_cv">
+      <input type="hidden" name="job_description" id="formJobDescription">
+
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <button type="button" class="btn btn-secondary" id="btnBackToStep3">&larr; Back to Mapping</button>
+        <button type="submit" class="btn btn-primary btn-lg" id="btnSubmitBatch">
+          Confirm &amp; Start Batch Research
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Client-Side State & Multi-Step Logic                                    -->
+<!-- ======================================================================= -->
+<script>
+  // Global Wizard State
+  const wizardState = {
+    currentStep: 1,
+    cvRegistered: {{ 'true' if (registered_cv and registered_cv.exists) else 'false' }},
+    cvFilename: "{{ (registered_cv.filename if registered_cv else '') | default('', true) }}",
+    cvSize: "{{ (registered_cv.size_formatted if registered_cv else '') }}",
+    cvSha: "{{ (registered_cv.sha256 if registered_cv else '') }}",
+    fileToken: null,
+    contactsFilename: null,
+    fileType: null,
+    sheetNames: [],
+    selectedSheet: null,
+    headers: [],
+    standardFields: {{ (standard_fields or [])|tojson }},
+    fieldDescriptions: {{ (field_descriptions or {})|tojson }},
+    proposedMapping: {},
+    activeMapping: {},
+    previewData: null,
+    previewFilter: 'ALL'
+  };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initStep1();
+    initStep2();
+    initStep3();
+    initStep4();
+  });
+
+  // -------------------------------------------------------------------------
+  // Stepper Controller
+  // -------------------------------------------------------------------------
+  function setWizardStep(stepNumber) {
+    wizardState.currentStep = stepNumber;
+    for (let i = 1; i <= 4; i++) {
+      const pane = document.getElementById(`stepPane${i}`);
+      const indicator = document.getElementById(`stepIndicator${i}`);
+      if (pane) pane.classList.toggle("active", i === stepNumber);
+      if (indicator) {
+        indicator.classList.toggle("active", i === stepNumber);
+        indicator.classList.toggle("completed", i < stepNumber);
+      }
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 1: CV Upload
+  // -------------------------------------------------------------------------
+  function initStep1() {
+    const cvDropzone = document.getElementById("cvDropzone");
+    const cvFileInput = document.getElementById("cvFileInput");
+    const cvUploadStatus = document.getElementById("cvUploadStatus");
+    const cvErrorAlert = document.getElementById("cvErrorAlert");
+    const cvErrorMsg = document.getElementById("cvErrorMsg");
+    const btnContinueStep1 = document.getElementById("btnContinueStep1");
+    const btnReplaceCv = document.getElementById("btnReplaceCv");
+    const btnClearCv = document.getElementById("btnClearCv");
+
+    cvDropzone.addEventListener("click", () => cvFileInput.click());
+
+    cvDropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      cvDropzone.classList.add("dragover");
+    });
+    cvDropzone.addEventListener("dragleave", () => cvDropzone.classList.remove("dragover"));
+    cvDropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      cvDropzone.classList.remove("dragover");
+      if (e.dataTransfer.files.length) {
+        handleCvUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    cvFileInput.addEventListener("change", () => {
+      if (cvFileInput.files.length) {
+        handleCvUpload(cvFileInput.files[0]);
+      }
+    });
+
+    btnContinueStep1?.addEventListener("click", () => setWizardStep(2));
+
+    btnReplaceCv?.addEventListener("click", () => {
+      document.getElementById("registeredCvContainer").style.display = "none";
+      document.getElementById("cvUploadSection").style.display = "block";
+    });
+
+    btnClearCv?.addEventListener("click", () => {
+      fetch("/cv/clear", { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" } })
+        .then(() => {
+          wizardState.cvRegistered = false;
+          document.getElementById("registeredCvContainer").style.display = "none";
+          document.getElementById("cvUploadSection").style.display = "block";
+        });
+    });
+
+    function handleCvUpload(file) {
+      cvErrorAlert.style.display = "none";
+      if (!file.name.toLowerCase().endsWith(".pdf")) {
+        cvErrorAlert.style.display = "block";
+        cvErrorMsg.textContent = "Only PDF files are supported for CV upload.";
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        cvErrorAlert.style.display = "block";
+        cvErrorMsg.textContent = `File exceeds 10 MB limit (${(file.size / (1024*1024)).toFixed(2)} MB).`;
+        return;
+      }
+
+      cvUploadStatus.textContent = `Validating ${file.name}...`;
+
+      const formData = new FormData();
+      formData.append("cv_file", file);
+
+      fetch("/cv/upload", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          cvUploadStatus.textContent = "";
+          cvErrorAlert.style.display = "block";
+          cvErrorMsg.textContent = data.error || "CV validation failed.";
+          return;
+        }
+
+        wizardState.cvRegistered = true;
+        wizardState.cvFilename = data.cv.filename;
+        wizardState.cvSize = data.cv.size_formatted;
+        wizardState.cvSha = data.cv.sha256;
+
+        document.getElementById("registeredCvName").textContent = data.cv.filename;
+        document.getElementById("registeredCvSize").textContent = data.cv.size_formatted;
+        document.getElementById("registeredCvSha").textContent = (data.cv.sha256 || "").slice(0, 16) + "...";
+
+        document.getElementById("cvUploadSection").style.display = "none";
+        document.getElementById("registeredCvContainer").style.display = "block";
+        cvUploadStatus.textContent = "";
+      })
+      .catch((err) => {
+        cvUploadStatus.textContent = "";
+        cvErrorAlert.style.display = "block";
+        cvErrorMsg.textContent = "Upload error: " + err.message;
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 2: Contacts File Upload
+  // -------------------------------------------------------------------------
+  function initStep2() {
+    const contactsDropzone = document.getElementById("contactsDropzone");
+    const contactsFileInput = document.getElementById("contactsFileInput");
+    const contactsFileDetails = document.getElementById("contactsFileDetails");
+    const contactsErrorAlert = document.getElementById("contactsErrorAlert");
+    const contactsErrorMsg = document.getElementById("contactsErrorMsg");
+    const sheetSelectGroup = document.getElementById("sheetSelectGroup");
+    const sheetSelect = document.getElementById("sheetSelect");
+    const btnContinueStep2 = document.getElementById("btnContinueStep2");
+    const btnBackToStep1 = document.getElementById("btnBackToStep1");
+
+    btnBackToStep1.addEventListener("click", () => setWizardStep(1));
+
+    // Mode cards toggle
+    document.getElementById("modeCardUploaded").addEventListener("click", () => {
+      document.getElementById("modeCardUploaded").classList.add("selected");
+      document.getElementById("modeCardTailored").classList.remove("selected");
+      document.getElementById("formWorkflowMode").value = "uploaded_cv";
+    });
+    document.getElementById("modeCardTailored").addEventListener("click", () => {
+      document.getElementById("modeCardTailored").classList.add("selected");
+      document.getElementById("modeCardUploaded").classList.remove("selected");
+      document.getElementById("formWorkflowMode").value = "tailored_cv";
+    });
+
+    contactsDropzone.addEventListener("click", () => contactsFileInput.click());
+
+    contactsDropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      contactsDropzone.classList.add("dragover");
+    });
+    contactsDropzone.addEventListener("dragleave", () => contactsDropzone.classList.remove("dragover"));
+    contactsDropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      contactsDropzone.classList.remove("dragover");
+      if (e.dataTransfer.files.length) {
+        handleSpreadsheetUpload(e.dataTransfer.files[0]);
+      }
+    });
+
+    contactsFileInput.addEventListener("change", () => {
+      if (contactsFileInput.files.length) {
+        handleSpreadsheetUpload(contactsFileInput.files[0]);
+      }
+    });
+
+    function handleSpreadsheetUpload(file) {
+      contactsErrorAlert.style.display = "none";
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!["csv", "xlsx", "xls"].includes(ext)) {
+        contactsErrorAlert.style.display = "block";
+        contactsErrorMsg.textContent = `Unsupported format '.${ext}'. Supported formats are .csv, .xlsx, .xls.`;
+        return;
+      }
+
+      contactsFileDetails.textContent = `Inspecting ${file.name}...`;
+
+      const formData = new FormData();
+      formData.append("contacts_file", file);
+
+      fetch("/contacts/inspect", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          contactsFileDetails.textContent = "";
+          contactsErrorAlert.style.display = "block";
+          contactsErrorMsg.textContent = data.error || "Failed to inspect spreadsheet.";
+          return;
+        }
+
+        wizardState.fileToken = data.file_token;
+        wizardState.contactsFilename = data.filename;
+        wizardState.fileType = data.file_type;
+        wizardState.sheetNames = data.sheet_names;
+        wizardState.selectedSheet = data.selected_sheet;
+        wizardState.headers = data.headers;
+        wizardState.proposedMapping = data.proposed_mapping;
+        wizardState.activeMapping = { ...data.proposed_mapping };
+
+        contactsFileDetails.textContent = `${data.filename} (${data.file_type.toUpperCase()} &bull; ~${data.total_rows_approx} rows)`;
+
+        // Setup sheet selector if multiple sheets
+        if (data.sheet_names.length > 1) {
+          sheetSelect.innerHTML = "";
+          data.sheet_names.forEach((s) => {
+            const opt = document.createElement("option");
+            opt.value = s;
+            opt.textContent = s;
+            if (s === data.selected_sheet) opt.selected = true;
+            sheetSelect.appendChild(opt);
+          });
+          sheetSelectGroup.style.display = "block";
+        } else {
+          sheetSelectGroup.style.display = "none";
+        }
+
+        btnContinueStep2.disabled = false;
+      })
+      .catch((err) => {
+        contactsFileDetails.textContent = "";
+        contactsErrorAlert.style.display = "block";
+        contactsErrorMsg.textContent = "Upload error: " + err.message;
+      });
+    }
+
+    btnContinueStep2.addEventListener("click", () => {
+      // Re-inspect if sheet changed
+      if (sheetSelectGroup.style.display !== "none") {
+        wizardState.selectedSheet = sheetSelect.value;
+      }
+      populateMappingStep();
+      setWizardStep(3);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 3: Mapping & Pre-Flight Validation Preview
+  // -------------------------------------------------------------------------
+  function initStep3() {
+    document.getElementById("btnBackToStep2").addEventListener("click", () => setWizardStep(2));
+    document.getElementById("btnContinueStep3").addEventListener("click", () => {
+      populateConfirmationStep();
+      setWizardStep(4);
+    });
+
+    document.getElementById("btnRefreshPreview").addEventListener("click", () => {
+      readActiveMappingFromUI();
+      loadValidationPreview();
+    });
+
+    document.getElementById("btnDownloadReport").addEventListener("click", () => {
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = "/contacts/download-report";
+      form.style.display = "none";
+
+      const tokenInp = document.createElement("input");
+      tokenInp.name = "file_token";
+      tokenInp.value = wizardState.fileToken;
+      form.appendChild(tokenInp);
+
+      if (wizardState.selectedSheet) {
+        const sheetInp = document.createElement("input");
+        sheetInp.name = "sheet_name";
+        sheetInp.value = wizardState.selectedSheet;
+        form.appendChild(sheetInp);
+      }
+
+      const mapInp = document.createElement("input");
+      mapInp.name = "mapping";
+      mapInp.value = JSON.stringify(wizardState.activeMapping);
+      form.appendChild(mapInp);
+
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
+    });
+  }
+
+  function populateMappingStep() {
+    document.getElementById("mappingFileMeta").textContent =
+      `${wizardState.contactsFilename} &bull; Sheet: ${wizardState.selectedSheet || 'Default'} &bull; ${wizardState.headers.length} headers detected`;
+
+    const tbody = document.getElementById("mappingTbody");
+    tbody.innerHTML = "";
+
+    wizardState.standardFields.forEach((fieldKey) => {
+      const tr = document.createElement("tr");
+      const isRequired = fieldKey === "email";
+      const desc = wizardState.fieldDescriptions[fieldKey] || fieldKey;
+      const currentMappedCol = wizardState.activeMapping[fieldKey] || "";
+
+      let selectOptions = `<option value="">— Not Mapped (Optional) —</option>`;
+      wizardState.headers.forEach((h) => {
+        const isSelected = h === currentMappedCol;
+        selectOptions += `<option value="${escapeHtml(h)}" ${isSelected ? "selected" : ""}>${escapeHtml(h)}</option>`;
+      });
+
+      const statusBadge = isRequired
+        ? (currentMappedCol ? `<span class="badge badge-success"><span class="badge-dot"></span>Required (Mapped)</span>` : `<span class="badge badge-danger"><span class="badge-dot"></span>Required (Select Column)</span>`)
+        : (currentMappedCol ? `<span class="badge badge-proceed"><span class="badge-dot"></span>Mapped</span>` : `<span class="badge badge-neutral">Unmapped</span>`);
+
+      tr.innerHTML = `
+        <td>
+          <strong style="color:var(--text-primary); font-size:13px;">${fieldKey}</strong>
+          ${isRequired ? '<span style="color:#ef4444; font-weight:bold;">*</span>' : ''}
+        </td>
+        <td style="font-size:12px; color:var(--text-muted);">${desc}</td>
+        <td>
+          <select class="form-select mapping-select" data-field="${fieldKey}" style="font-size:12px; padding:0.35rem 0.6rem;">
+            ${selectOptions}
+          </select>
+        </td>
+        <td>${statusBadge}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    loadValidationPreview();
+  }
+
+  function readActiveMappingFromUI() {
+    const selects = document.querySelectorAll(".mapping-select");
+    const newMap = {};
+    selects.forEach((sel) => {
+      const f = sel.getAttribute("data-field");
+      newMap[f] = sel.value || null;
+    });
+    wizardState.activeMapping = newMap;
+  }
+
+  function loadValidationPreview() {
+    fetch("/contacts/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_token: wizardState.fileToken,
+        sheet_name: wizardState.selectedSheet,
+        mapping: wizardState.activeMapping
+      })
+    })
+    .then((res) => res.json())
+    .then((data) => {
+      if (!data.success) {
+        alert("Preview error: " + (data.error || "Could not validate contacts."));
+        return;
+      }
+
+      wizardState.previewData = data;
+      renderPreviewMetrics(data.summary);
+      renderPreviewTableRows(data.rows);
+
+      // Disable continue if valid contacts === 0
+      document.getElementById("btnContinueStep3").disabled = data.summary.valid_email_count === 0;
+    })
+    .catch((err) => alert("Error: " + err.message));
+  }
+
+  function renderPreviewMetrics(summary) {
+    document.getElementById("valCountValid").textContent = summary.valid_email_count;
+    document.getElementById("valCountSyntax").textContent = summary.invalid_syntax_count;
+    document.getElementById("valCountMissing").textContent = summary.missing_email_count;
+    document.getElementById("valCountDuplicate").textContent = summary.duplicate_email_count;
+    document.getElementById("valCountNoCompany").textContent = summary.missing_company_count;
+    document.getElementById("valCountNoName").textContent = summary.missing_name_count;
+    document.getElementById("valCountFreeProvider").textContent = summary.free_provider_count;
+    document.getElementById("valCountTotal").textContent = summary.total_data_rows;
+  }
+
+  function renderPreviewTableRows(rows) {
+    const tbody = document.getElementById("previewTableBody");
+    tbody.innerHTML = "";
+
+    const filter = wizardState.previewFilter;
+    const filtered = rows.filter((r) => {
+      if (filter === "VALID") return r.is_valid;
+      if (filter === "ISSUES") return !r.is_valid;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:2rem; color:var(--text-dim);">No rows match the selected filter.</td></tr>`;
+      return;
+    }
+
+    filtered.slice(0, 100).forEach((r) => {
+      const tr = document.createElement("tr");
+
+      let badgeHtml = '<span class="badge badge-success"><span class="badge-dot"></span>Valid</span>';
+      if (r.status === "SYNTAX_ERROR") {
+        badgeHtml = '<span class="badge badge-danger"><span class="badge-dot"></span>Syntax Error</span>';
+      } else if (r.status === "MISSING_EMAIL") {
+        badgeHtml = '<span class="badge badge-danger"><span class="badge-dot"></span>Missing Email</span>';
+      } else if (r.status === "DUPLICATE") {
+        badgeHtml = '<span class="badge badge-warning"><span class="badge-dot"></span>Duplicate</span>';
+      }
+
+      tr.innerHTML = `
+        <td style="font-family:var(--font-mono); color:var(--text-dim);">${r.row_number}</td>
+        <td>
+          <strong class="cell-email" title="${escapeHtml(r.email)}">${escapeHtml(r.email || "—")}</strong>
+          ${r.is_free_provider ? '<span class="badge badge-neutral" style="font-size:10px; padding:1px 5px; margin-top:2px;">Free Domain</span>' : ''}
+        </td>
+        <td>${escapeHtml(r.contact_name || "—")}</td>
+        <td><div class="cell-company">${escapeHtml(r.company_name || "—")}</div></td>
+        <td><div class="cell-subtext">${escapeHtml(r.website || "—")}</div></td>
+        <td>${badgeHtml}</td>
+        <td style="font-size:12px; color:var(--text-muted); word-break:break-word;">${escapeHtml(r.reason)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function filterPreviewRows(filterType) {
+    wizardState.previewFilter = filterType;
+    document.getElementById("btnFilterAll").classList.toggle("active", filterType === "ALL");
+    document.getElementById("btnFilterValid").classList.toggle("active", filterType === "VALID");
+    document.getElementById("btnFilterIssues").classList.toggle("active", filterType === "ISSUES");
+
+    if (wizardState.previewData) {
+      renderPreviewTableRows(wizardState.previewData.rows);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 4: Confirmation & Launch
+  // -------------------------------------------------------------------------
+  function initStep4() {
+    document.getElementById("btnBackToStep3").addEventListener("click", () => setWizardStep(3));
+
+    document.getElementById("finalProcessForm").addEventListener("submit", () => {
+      const btn = document.getElementById("btnSubmitBatch");
+      btn.disabled = true;
+      btn.textContent = "Processing Batch Outreach...";
+    });
+  }
+
+  function populateConfirmationStep() {
+    const targetRole = document.getElementById("targetRole").value || "AI/ML Intern";
+    const campaignId = document.getElementById("campaignId").value || "batch_campaign";
+    const jobDescription = document.getElementById("jobDescription").value || "";
+    const mode = document.getElementById("formWorkflowMode").value || "uploaded_cv";
+
+    document.getElementById("confirmCvFilename").textContent = wizardState.cvFilename || "Registered Reference CV";
+    document.getElementById("confirmContactsFilename").textContent = wizardState.contactsFilename || "contacts.csv";
+    document.getElementById("confirmSheetInfo").textContent = `Worksheet: ${wizardState.selectedSheet || 'Default'}`;
+    document.getElementById("confirmTargetRole").textContent = targetRole;
+    document.getElementById("confirmCampaignId").textContent = campaignId;
+
+    if (wizardState.previewData) {
+      const s = wizardState.previewData.summary;
+      document.getElementById("confirmValidCountBadge").textContent = `${s.valid_email_count} Valid Contacts`;
+      const skipped = (s.invalid_syntax_count + s.missing_email_count + s.duplicate_email_count);
+      document.getElementById("confirmSkippedCountBadge").textContent = `${skipped} Skipped Rows`;
+    }
+
+    // Populate hidden form inputs
+    document.getElementById("formFileToken").value = wizardState.fileToken;
+    document.getElementById("formSheetName").value = wizardState.selectedSheet || "";
+    document.getElementById("formMappingJson").value = JSON.stringify(wizardState.activeMapping);
+    document.getElementById("formTargetRole").value = targetRole;
+    document.getElementById("formCampaignId").value = campaignId;
+    document.getElementById("formWorkflowMode").value = mode;
+    document.getElementById("formJobDescription").value = jobDescription;
+  }
+</script>
+{% endblock %}

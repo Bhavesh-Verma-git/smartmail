@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Persistent Send Log — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Persistent Send Log &amp; Safety Registry</h1>
+    <p class="page-subtitle">
+      SQLite-backed audit trail (<code>data/send_log.db</code>). Enforces duplicate-send prevention and uncertain delivery safeguards across restarts.
+    </p>
+  </div>
+  <div class="header-actions">
+    <div class="badge-safety">
+      <span class="badge-pulse"></span>
+      <span>Duplicate Protection Active</span>
+    </div>
+  </div>
+</div>
+
+<!-- Safeguards Info Box -->
+<div class="card" style="margin-bottom: 2rem; background: var(--bg-card); border-color: var(--border-color);">
+  <div class="card-header">
+    <h2 class="card-title" style="font-size: 14px;">
+      Core Outreach Safety Policies
+    </h2>
+  </div>
+  <div class="grid-3" style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+    <div>
+      <strong style="color:var(--text-primary); display:block; margin-bottom:2px;">1. Duplicate Prevention</strong>
+      A confirmed successful send permanently blocks any subsequent emails to the same recipient in that campaign.
+    </div>
+    <div>
+      <strong style="color:var(--text-primary); display:block; margin-bottom:2px;">2. Uncertain Outcome Lock</strong>
+      If a transmission times out, it is logged as UNCERTAIN and locked. Automatic retry is strictly blocked.
+    </div>
+    <div>
+      <strong style="color:var(--text-primary); display:block; margin-bottom:2px;">3. Human Approval Mandate</strong>
+      Every draft must be explicitly approved. Unapproved drafts are blocked at the sender level.
+    </div>
+  </div>
+</div>
+
+<!-- Send Log Entries -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">Recorded Outreach History ({{ entries|length }})</h2>
+    <span style="font-size: 11px; color: var(--text-dim); font-family:var(--font-mono);">Newest entries first</span>
+  </div>
+
+  {% if not entries %}
+    <div class="empty-state">
+      <div style="width:36px; height:36px; border-radius:var(--radius-sm); background:var(--bg-subtle); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem auto;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      </div>
+      <h3 class="empty-title">Send log is empty</h3>
+      <p class="empty-desc">
+        No email drafts or delivery attempts have been recorded in SQLite yet.
+      </p>
+    </div>
+  {% else %}
+    <div class="table-responsive">
+      <table class="table-main">
+        <thead>
+          <tr>
+            <th style="min-width: 110px;">Status</th>
+            <th style="min-width: 220px;">Recipient</th>
+            <th style="min-width: 160px;">Campaign</th>
+            <th style="min-width: 140px;">Draft ID</th>
+            <th style="min-width: 130px;">Last Updated (UTC)</th>
+            <th style="min-width: 200px;">Safety Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+            <tr>
+              <td>
+                {% if e.status == 'SUCCESS' %}
+                  <span class="badge badge-success"><span class="badge-dot"></span>SUCCESS</span>
+                {% elif e.status == 'APPROVED' %}
+                  <span class="badge badge-proceed"><span class="badge-dot"></span>APPROVED</span>
+                {% elif e.status == 'DRAFT' %}
+                  <span class="badge badge-draft"><span class="badge-dot"></span>DRAFT</span>
+                {% elif e.status == 'UNCERTAIN' %}
+                  <span class="badge badge-warning"><span class="badge-dot"></span>UNCERTAIN</span>
+                {% elif e.status == 'FAILED' %}
+                  <span class="badge badge-danger"><span class="badge-dot"></span>FAILED</span>
+                {% else %}
+                  <span class="badge badge-neutral"><span class="badge-dot"></span>{{ e.status }}</span>
+                {% endif %}
+              </td>
+              <td>
+                <strong class="cell-email" title="{{ e.recipient }}">{{ e.recipient }}</strong>
+              </td>
+              <td>
+                <code class="font-mono" style="font-size:12px; color:var(--text-secondary); word-break:break-all;">{{ e.campaign_id or '—' }}</code>
+              </td>
+              <td>
+                <a href="{{ url_for('view_draft', draft_id=e.draft_id) }}" class="font-mono" style="font-size: 12px; color: var(--info);">
+                  {{ e.draft_id }}
+                </a>
+              </td>
+              <td>
+                <span class="cell-date">
+                  {{ e.updated_at[:19].replace('T', ' ') if e.updated_at else '—' }}
+                </span>
+              </td>
+              <td style="font-size: 12px; line-height: 1.35;">
+                {% if e.status == 'SUCCESS' %}
+                  <span style="color:#f87171; font-weight:500;">Resend Blocked (Duplicate Safe)</span>
+                {% elif e.status == 'UNCERTAIN' %}
+                  <span style="color:#fbbf24; font-weight:500;">Reconciliation Required</span>
+                {% elif e.status == 'APPROVED' %}
+                  <span style="color:#4ade80;">Ready for Send Attempt</span>
+                {% else %}
+                  <span style="color:var(--text-dim);">Audit Log Only</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

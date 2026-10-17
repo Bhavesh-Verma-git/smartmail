@@ -1,0 +1,457 @@
+{
+  "_comment": "Master candidate profile for automated outreach and CV tailoring.",
+  "_schema_version": "1.0.0",
+  "_workflow_support": [
+    "tailored_cv_and_outreach"
+  ],
+  "personal_info": {
+    "full_name": "Bhavesh Verma",
+    "email": "bhaveshverma7890@gmail.com",
+    "phone": "+91 7067419231",
+    "location": "India",
+    "linkedin_url": "https://www.linkedin.com/in/bhavesh-verma-2125bb28a/",
+    "github_url": "https://github.com/Bhavesh-Verma-git",
+    "portfolio_url": null,
+    "preferred_name": "Bhavesh"
+  },
+  "education": [
+    {
+      "institution": "IIT Kharagpur",
+      "degree": "B.Tech. (Hons.) in Mining Engineering and M.Tech. in Petroleum Engineering (Dual Degree)",
+      "location": "Kharagpur, India",
+      "start_date": "2023-07",
+      "end_date": "2028-05",
+      "cgpa": "8.30 / 10.0",
+      "relevant_coursework": [
+        "Programming and Data Structures",
+        "Advanced Calculus",
+        "Linear Algebra",
+        "Numerical and Complex Analysis",
+        "Probability and Statistics",
+        "Applied AI, ML & DL Techniques",
+        "Advanced Learning Paradigms for Artificial Intelligence"
+      ],
+      "achievements": [
+        "Micro-Specialization in AI & ML"
+      ]
+    },
+    {
+      "institution": "Shri Shankaracharya Vidyalaya",
+      "degree": "Higher Secondary (CBSE)",
+      "location": "India",
+      "start_date": null,
+      "end_date": "2022",
+      "cgpa": "86%",
+      "relevant_coursework": [],
+      "achievements": []
+    },
+    {
+      "institution": "Sun Shine Hr. Sec. School",
+      "degree": "Secondary (CGBSE)",
+      "location": "India",
+      "start_date": null,
+      "end_date": "2020",
+      "cgpa": "91%",
+      "relevant_coursework": [],
+      "achievements": []
+    }
+  ],
+  "experience": [
+    {
+      "id": "exp-001",
+      "organization": "Red Panda Games",
+      "role": "Data Science Intern",
+      "employment_type": "internship",
+      "location": "Bengaluru, India",
+      "start_date": "2026-03",
+      "end_date": "2026-05",
+      "responsibilities": [
+        "Developed diffusion-based generative AI pipelines utilizing Flux, SD1.5, Trellis-4B, and ControlNet.",
+        "Optimized AWS GPU inference workflows and implemented memory offloading strategies.",
+        "Engineered Python microservices using Celery and Redis.",
+        "Executed 3D mesh processing and asset preparation pipelines."
+      ],
+      "verified_achievements": [
+        {
+          "claim": "Diffusion-based generative AI pipeline using Flux, SD1.5, Trellis-4B and ControlNet; AWS GPU inference optimization and memory offloading; Python microservices using Celery and Redis; 3D mesh processing and asset preparation.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "technologies_used": [
+        "Python",
+        "Flux",
+        "Stable Diffusion 1.5",
+        "Trellis-4B",
+        "ControlNet",
+        "AWS",
+        "Celery",
+        "Redis",
+        "3D Mesh Processing"
+      ],
+      "references_available": false
+    },
+    {
+      "id": "exp-002",
+      "organization": "Prof. Kuntal Roy, IISER Bhopal",
+      "role": "Machine Learning Intern",
+      "employment_type": "internship",
+      "location": "Bhopal, India",
+      "start_date": "2025-05",
+      "end_date": "2025-07",
+      "responsibilities": [
+        "Developed NLP and generative AI pipelines for computational linguistics tasks.",
+        "Implemented and evaluated Logistic Regression, Naive Bayes, word embeddings, LSTMs, GRUs, BERT, and T5.",
+        "Executed sentiment analysis, POS tagging, and machine translation workflows."
+      ],
+      "verified_achievements": [
+        {
+          "claim": "NLP and generative AI pipelines; Logistic Regression, Naive Bayes, word embeddings, LSTMs, GRUs, BERT and T5; sentiment analysis, POS tagging and machine translation.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "technologies_used": [
+        "Python",
+        "NLP",
+        "BERT",
+        "T5",
+        "LSTM",
+        "GRU",
+        "Logistic Regression",
+        "Naive Bayes",
+        "Word Embeddings"
+      ],
+      "references_available": false
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-001",
+      "name": "ControlPlane.ai — Context-Aware AI Governance Middleware",
+      "type": "personal",
+      "start_date": null,
+      "end_date": null,
+      "short_description": "Context-aware AI governance middleware featuring a state machine, hybrid retrieval, parallel auditing, and compliance retrieval.",
+      "long_description": "Engineered a nine-node state machine using LangGraph and LiteLLM, hybrid retrieval with FAISS and BM25 using Reciprocal Rank Fusion, parallel auditing, XGBoost hallucination classification, toxicity-model ensemble, and compliance retrieval via Neo4j, validated with Streamlit and LangSmith.",
+      "technologies": [
+        "LangGraph",
+        "LiteLLM",
+        "Neo4j",
+        "FAISS",
+        "BM25",
+        "Reciprocal Rank Fusion",
+        "XGBoost",
+        "Streamlit",
+        "LangSmith",
+        "Python"
+      ],
+      "my_contributions": [
+        "Architected a nine-node state machine with parallel auditing and compliance retrieval.",
+        "Implemented hybrid retrieval combining FAISS and BM25 using Reciprocal Rank Fusion.",
+        "Integrated XGBoost hallucination classifier and toxicity model ensemble."
+      ],
+      "outcomes": [
+        {
+          "claim": "Validated context-aware AI governance middleware with nine-node state machine, hybrid retrieval, parallel auditing, and compliance retrieval via Streamlit and LangSmith.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "links": {
+        "github": "https://github.com/Bhavesh-Verma-git/Controlplane.ai",
+        "demo": null,
+        "paper": null
+      },
+      "highlight_for_roles": [
+        "AI/ML Intern",
+        "Generative AI/Agentic AI Intern",
+        "Machine Learning Intern"
+      ]
+    },
+    {
+      "id": "proj-002",
+      "name": "Building a Network Security System",
+      "type": "personal",
+      "start_date": null,
+      "end_date": null,
+      "short_description": "Phishing and safe URL classification system with automated ETL pipelines, experiment tracking, and containerized deployment.",
+      "long_description": "Developed an automated ETL and experiment tracking system for phishing and safe URL classification using MongoDB Atlas, MLflow, DagsHub, Docker, AWS, and CI/CD pipelines, reporting a 40% reduction in deployment latency.",
+      "technologies": [
+        "Python",
+        "MongoDB Atlas",
+        "MLflow",
+        "DagsHub",
+        "Docker",
+        "AWS",
+        "CI/CD"
+      ],
+      "my_contributions": [
+        "Implemented automated ETL pipeline and URL classification models.",
+        "Integrated experiment tracking using MLflow and DagsHub.",
+        "Containerized the service with Docker and deployed via AWS CI/CD."
+      ],
+      "outcomes": [
+        {
+          "claim": "Reported 40% reduction in deployment latency in CV.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "links": {
+        "github": null,
+        "demo": null,
+        "paper": null
+      },
+      "highlight_for_roles": [
+        "Machine Learning Intern",
+        "Data Science Intern"
+      ]
+    },
+    {
+      "id": "proj-003",
+      "name": "E-Commerce Price Prediction",
+      "type": "personal",
+      "start_date": null,
+      "end_date": null,
+      "short_description": "Price prediction framework leveraging DeBERTa-v3, regular expressions, and NLP feature engineering.",
+      "long_description": "Constructed an e-commerce price prediction model utilizing DeBERTa-v3 embeddings, regex, and NLP feature engineering, reporting a SMAPE of 42.22% and a 30% reduction in inference latency.",
+      "technologies": [
+        "Python",
+        "DeBERTa-v3",
+        "Regex",
+        "NLP",
+        "scikit-learn"
+      ],
+      "my_contributions": [
+        "Engineered NLP features and regex patterns for text attribute extraction.",
+        "Fine-tuned DeBERTa-v3 model representations and optimized inference speed."
+      ],
+      "outcomes": [
+        {
+          "claim": "Reported SMAPE of 42.22% and 30% inference latency reduction in CV.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "links": {
+        "github": "https://github.com/Bhavesh-Verma-git/E-Commerce-Price-Prediction-Model",
+        "demo": null,
+        "paper": null
+      },
+      "highlight_for_roles": [
+        "Data Science Intern",
+        "Machine Learning Intern"
+      ]
+    },
+    {
+      "id": "proj-004",
+      "name": "Character Backstory Verification System",
+      "type": "academic",
+      "start_date": null,
+      "end_date": null,
+      "short_description": "Hybrid retrieval and natural language inference system for verifying character narrative consistency.",
+      "long_description": "Engineered a hybrid retrieval system combining BM25, FAISS, Reciprocal Rank Fusion, cross-encoder re-ranking, and DeBERTa-v3 NLI, earning National Finalist at Kharagpur Data Science Hackathon 2026 with CV-reported accuracy of 81.25% and F1-score of 0.854.",
+      "technologies": [
+        "Python",
+        "BM25",
+        "FAISS",
+        "Reciprocal Rank Fusion",
+        "Cross-Encoder",
+        "DeBERTa-v3",
+        "NLI"
+      ],
+      "my_contributions": [
+        "Developed hybrid retrieval pipeline combining BM25 and FAISS with RRF.",
+        "Integrated cross-encoder re-ranking and DeBERTa-v3 NLI verification."
+      ],
+      "outcomes": [
+        {
+          "claim": "National Finalist, Kharagpur Data Science Hackathon 2026; CV-reported accuracy of 81.25% and F1-score of 0.854.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "links": {
+        "github": null,
+        "demo": null,
+        "paper": null
+      },
+      "highlight_for_roles": [
+        "AI/ML Intern",
+        "Data Science Intern"
+      ]
+    },
+    {
+      "id": "proj-005",
+      "name": "Predictive Profitability Framework",
+      "type": "academic",
+      "start_date": null,
+      "end_date": null,
+      "short_description": "Financial profitability framework utilizing an ensemble of LightGBM, XGBoost, and financial formulas.",
+      "long_description": "Built an ensemble framework leveraging LightGBM, XGBoost, and financial domain formulas, recognized as Top Performer in American Express Campus Challenge 2026 with CV-reported accuracy of 91.33%.",
+      "technologies": [
+        "Python",
+        "LightGBM",
+        "XGBoost",
+        "scikit-learn"
+      ],
+      "my_contributions": [
+        "Constructed LightGBM and XGBoost gradient boosting ensemble models.",
+        "Integrated financial metrics and domain formulation for profitability scoring."
+      ],
+      "outcomes": [
+        {
+          "claim": "Top Performer, American Express Campus Challenge 2026; CV-reported accuracy of 91.33%.",
+          "evidence": "Reported in CV",
+          "confidence": "reported"
+        }
+      ],
+      "links": {
+        "github": null,
+        "demo": null,
+        "paper": null
+      },
+      "highlight_for_roles": [
+        "Data Science Intern",
+        "Machine Learning Intern"
+      ]
+    }
+  ],
+  "technical_skills": {
+    "languages": [
+      "Python",
+      "C",
+      "C++",
+      "CSS",
+      "HTML"
+    ],
+    "frameworks_and_libraries": [
+      "NumPy",
+      "Pandas",
+      "scikit-learn",
+      "Matplotlib",
+      "Seaborn",
+      "Streamlit",
+      "Flask",
+      "BentoML",
+      "FastAPI"
+    ],
+    "databases": [
+      "Neo4j",
+      "MongoDB Atlas",
+      "ChromaDB",
+      "FAISS"
+    ],
+    "tools_and_platforms": [
+      "Git",
+      "GitHub",
+      "Docker",
+      "MATLAB",
+      "AWS",
+      "DagsHub",
+      "MLflow",
+      "LangSmith",
+      "Excel",
+      "VS Code",
+      "Canva",
+      "Figma",
+      "ETL pipelines",
+      "CI/CD"
+    ],
+    "ml_and_data": [
+      "LangGraph",
+      "LangChain",
+      "LiteLLM",
+      "Hugging Face",
+      "Flux",
+      "Trellis",
+      "Stable Diffusion",
+      "RAG",
+      "ChromaDB",
+      "FAISS",
+      "XGBoost",
+      "LightGBM",
+      "RAGAS",
+      "Langfuse",
+      "LLM-as-Judge",
+      "BERT",
+      "T5",
+      "LSTM",
+      "GRU",
+      "ControlNet",
+      "DeBERTa-v3",
+      "Reciprocal Rank Fusion",
+      "Cross-Encoder",
+      "BM25"
+    ],
+    "soft_skills": []
+  },
+  "achievements_and_awards": [
+    {
+      "title": "National Finalist — Kharagpur Data Science Hackathon 2026",
+      "issuer": "IIT Kharagpur",
+      "date": "2026",
+      "description": "National Finalist for Character Backstory Verification System using hybrid retrieval and DeBERTa-v3 NLI.",
+      "evidence": null
+    },
+    {
+      "title": "Top Performer — American Express Campus Challenge 2026",
+      "issuer": "American Express",
+      "date": "2026",
+      "description": "Top Performer for Predictive Profitability Framework using LightGBM and XGBoost ensemble.",
+      "evidence": null
+    },
+    {
+      "title": "Micro-Specialization in AI & ML",
+      "issuer": "IIT Kharagpur",
+      "date": "2026",
+      "description": "Awarded Micro-Specialization in Artificial Intelligence and Machine Learning.",
+      "evidence": null
+    },
+    {
+      "title": "Machine Learning, Deep Learning & NLP Specializations",
+      "issuer": "Online Specializations",
+      "date": null,
+      "description": "Specializations covering Machine Learning, Deep Learning, and Natural Language Processing.",
+      "evidence": null
+    },
+    {
+      "title": "Data Science, ML, DL & NLP Bootcamp",
+      "issuer": "Krish Naik",
+      "date": null,
+      "description": "Comprehensive bootcamp covering Data Science, ML, DL, and NLP.",
+      "evidence": null
+    }
+  ],
+  "verified_metrics": {
+    "_comment": "Put only numbers you can back up. Mark estimated ones clearly.",
+    "github_stars_total": null,
+    "open_source_contributions": null,
+    "leetcode_problems_solved": null,
+    "competitive_programming_rating": null
+  },
+  "preferences": {
+    "_comment": "Used by the outreach workflow to filter and personalise messages.",
+    "target_roles": [
+      "AI/ML Intern",
+      "Machine Learning Intern",
+      "Data Science Intern",
+      "Generative AI/Agentic AI Intern"
+    ],
+    "target_industries": [
+      "Artificial Intelligence",
+      "Gaming & Generative AI",
+      "FinTech",
+      "Cybersecurity",
+      "Data Science"
+    ],
+    "preferred_locations": [
+      "India",
+      "Remote"
+    ],
+    "availability_start": "Immediately",
+    "availability_duration_months": "3–6 months",
+    "existing_cv_path": null
+  }
+}

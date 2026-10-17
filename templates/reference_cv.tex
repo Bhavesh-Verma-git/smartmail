@@ -1,0 +1,215 @@
+%-------------------------
+% Resume in Latex
+% Based on: Jake Gutierrez / sb2nov template
+% Content: Bhavesh Verma
+%------------------------
+
+\documentclass[letterpaper,10pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{booktabs}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.65in}
+\addtolength{\evensidemargin}{-0.65in}
+\addtolength{\textwidth}{1.3in}
+\addtolength{\topmargin}{-.95in}
+\addtolength{\textheight}{2.4in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-10.5pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-6.5pt}]
+
+% Ensure that generate pdf is machine readable/ATS parsable
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}[leftmargin=0.15in, itemsep=1pt, parsep=0pt, topsep=2pt]}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-7pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\LARGE \scshape Bhavesh Verma} \\ \vspace{1pt}
+    \small +91 7067419231 $|$ \href{mailto:bhaveshverma7890@gmail.com}{bhaveshverma7890@gmail.com}$|$ \href{https://github.com/Bhavesh-Verma-git}{Github} \\ \vspace{1pt}
+    \small B.Tech.\ (Hons.) in Mining Engineering and Master of Petroleum Engineering, IIT Kharagpur $|$ Micro-Specialization in AI \& ML
+\end{center}
+\vspace{-10pt}
+
+%-----------EDUCATION-----------
+\section{Educational Qualifications}
+\vspace{-1pt}
+\begin{center}
+{\renewcommand{\arraystretch}{1.6}\setlength{\tabcolsep}{6pt}
+\small
+\begin{tabularx}{0.97\textwidth}{@{} >{\centering\arraybackslash}p{0.75in} X >{\centering\arraybackslash}p{3in} >{\centering\arraybackslash}p{1.05in} @{}}
+\toprule
+\textbf{Year} & \textbf{Degree} & \textbf{Institute/School} & \textbf{CGPA/Percentage} \\
+\midrule
+2023--2028 & M.Tech.\ Dual Degree (5Y)& IIT Kharagpur & 8.30/10 \\
+2022 & Higher Secondary Examination (CBSE) & Shri Shankaracharya Vidyalaya  & 86\% \\
+2020 & Secondary Examination (CGBSE) & Sun Shine Hr. Sec. School & 91\% \\
+\bottomrule
+\end{tabularx}}
+\end{center}
+\vspace{-9pt}
+
+
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {Data Science Intern}{March 2026 -- May 2026}
+      {Red Panda Games}{Bengaluru, India}
+      \resumeItemListStart
+        \resumeItem{Architected a \textbf{diffusion}-based Generative AI pipeline integrating \textbf{Flux}, \textbf{SD1.5}, and \textbf{Trellis-4B} to synthesize 3D meshes from prompts, orchestrating \textbf{ControlNet} with dynamic scaling and letterbox-padded \textbf{OpenPose} skeletons for accurate body proportions}
+        \resumeItem{Optimized \textbf{AWS} GPU spot instances (L4/L40S) for efficient diffusion-model inference across 40+ GB workloads, resolving critical OOM crashes via CPU memory offloading and Linux swap}
+        \resumeItem{Engineered Python microservices with \textbf{Celery} and \textbf{Redis} to decouple 3D rendering into dedicated workers, and streamlined mesh assets for Auto-Rig Pro using \textbf{U2-Net} background removal, quad-dominant retopology, and 1M-triangle decimation}
+      \resumeItemListEnd
+
+    \resumeSubheading
+      {Machine Learning Intern}{May 2025 -- July 2025}
+      {Prof.\ Kuntal Roy, IISER Bhopal}{Bhopal, India}
+      \resumeItemListStart
+        \resumeItem{Conducted research in \textbf{NLP} and Generative AI, formulating scalable end-to-end pipelines using \textbf{Logistic Regression}, \textbf{Naive Bayes}, and word embedding methodologies}
+        \resumeItem{Built deep learning models leveraging \textbf{LSTMs}, \textbf{GRUs}, and Transformer architectures such as \textbf{BERT} and \textbf{T5}; developed NLP applications including sentiment analysis, POS tagging, and machine translation using fine-tuned pretrained Transformer models}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+%-----------PROJECTS-----------
+\section{Projects}
+    \resumeSubHeadingListStart
+
+      \resumeProjectHeading
+          {\textbf{ControlPlane.ai: Context-Aware AI Governance Middleware} $|$ \emph{LangGraph, LiteLLM, Neo4j}}{May 2026 -- June 2026}
+          \resumeItemListStart
+            \resumeItem{Architected a 9-node \textbf{LangGraph} state machine that guards, routes, answers, and performs dual audits every LLM response in parallel, hitting a sub-\textbf{10s} p95 latency budget (verified via automated benchmark) and \textbf{5--8s} end-to-end on warm infrastructure}
+            \resumeItem{Built an agentic router across \textbf{5} knowledge bases (keyword fast-path, LLM tool calling, embedding fallback) feeding hybrid retrieval that fuses \textbf{FAISS} dense and \textbf{BM25} sparse search per knowledge base via \textbf{Reciprocal Rank Fusion} ($k$=60), balancing retrieved-context depth against the end-to-end latency budget}
+            \resumeItem{Engineered parallel audit branches a 12-feature \textbf{XGBoost} hallucination classifier with \textbf{RAGAS} judge and a 3-model toxicity ensemble (Detoxify, ToxicBERT, RoBERTa) backed by a \textbf{Neo4j} compliance retriever, capping latency at $\!<\!7.4$s; served via a \textbf{LiteLLM} gateway with failover and semantic caching, validated by \textbf{28} tests and \textbf{LangSmith} tracing in a \textbf{Streamlit} dashboard}
+          \resumeItemListEnd
+
+      \resumeProjectHeading
+          {\textbf{Building a Network Security System} $|$ \emph{MongoDB Atlas, MLflow, DagsHub, Docker, AWS, CI/CD}}{Nov 2025 -- Dec 2025}
+          \resumeItemListStart
+            \resumeItem{Programmed a Network Security ML platform predicting whether URLs are phishing or safe, enabling real-time threat classification via user-uploaded data}
+            \resumeItem{Automated ETL pipeline using \textbf{MongoDB Atlas}, streamlined experiment tracking via \textbf{MLflow}/\textbf{DagsHub}, and reduced deployment latency by \textbf{40\%} using Docker and CI/CD pipelines on AWS}
+          \resumeItemListEnd
+
+      \resumeProjectHeading
+          {\textbf{E-Commerce Price Prediction} $|$ \emph{DeBERTa-v3, Regex, NLP Feature Engineering}}{Jan 2026 -- Feb 2026}
+          \resumeItemListStart
+            \resumeItem{Devised a text-based regression model to predict product prices from catalog descriptions using advanced NLP feature engineering}
+            \resumeItem{Leveraged a hybrid pipeline combining Regex feature extraction and \textbf{DeBERTa-v3} embeddings, achieving \textbf{42.22\% SMAPE}; configured training with Huber Loss and dynamic padding, reducing inference latency by \textbf{30\%}}
+          \resumeItemListEnd
+
+    \resumeSubHeadingListEnd
+
+
+%-----------COMPETITIONS / ACHIEVEMENTS-----------
+\section{Competitions \& Achievements}
+    \resumeSubHeadingListStart
+
+      \resumeProjectHeading
+          {\textbf{Character Backstory Verification System} $|$ \emph{National Finalist, Kharagpur Data Science Hackathon 2026}}{Dec 2025 -- Jan 2026}
+          \resumeItemListStart
+            \resumeItem{Designed a \textbf{Retrieval-Augmented Generation (RAG)} pipeline for backstory verification, integrating hybrid retrieval using BM25, FAISS dense embeddings, Reciprocal Rank Fusion, and cross-encoder re-ranking to balance context quality against query cost}
+            \resumeItem{Applied \textbf{DeBERTa-v3 NLI} to detect semantic text entailment/contradiction with confidence scores, achieving \textbf{81.25\% accuracy} and \textbf{0.854 F1-score}}
+          \resumeItemListEnd
+
+      \resumeProjectHeading
+          {\textbf{Predictive Profitability Framework} $|$ \emph{Top Performer, American Express Campus Challenge 2026}}{July 2026 -- Aug 2026}
+          \resumeItemListStart
+            \resumeItem{Architected a hybrid ensemble blending a financial formula with \textbf{LightGBM}/\textbf{XGBoost} to predict profitability, achieving verified \textbf{91.33\% accuracy}}
+            \resumeItem{Derived a broad P\&L profitability framework from 10K data research, incorporating 24\% APR, 3\% interchange, 96\% URR economics}
+            \resumeItem{Generated \textbf{2M+} Out-of-Fold predictions via 5-Fold CV, applying rank-normalization and SHAP to validate feature-driven, credit risk-based decisions}
+          \resumeItemListEnd
+
+    \resumeSubHeadingListEnd
+
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages}{: Python (proficient), C, C++, CSS, HTML} \\
+     \textbf{Frameworks \& Libraries}{: NumPy, Pandas, scikit-learn, Matplotlib, Seaborn, Streamlit, Flask, BentoML, FastAPI} \\
+     \textbf{GenAI \& ML}{: LangGraph, LangChain, LiteLLM, Hugging Face, Flux, Trellis, Stable Diffusion, RAG, ChromaDB, FAISS, XGBoost, RAGAS, Langfuse, LLM-as-Judge} \\
+     \textbf{Tools}{: Git, GitHub, Docker, MATLAB, AWS, Neo4j, DagsHub, MLflow, LangSmith, Excel, VS Code, Canva, ETL Pipeline, Figma}}}
+ \end{itemize}
+
+%-----------ADDITIONAL INFORMATION-----------
+\section{Additional Information}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+    \textbf{Relevant Coursework}{: Programming and Data Structures; Advanced Calculus; Linear Algebra; Numerical and Complex Analysis; Probability and Statistics; Applied AI, ML \& DL Techniques; Advanced Learning Paradigms for Artificial Intelligence} \\
+     \textbf{Certifications}{: Machine Learning, Deep Learning \& NLP Specializations; Data Science, ML, DL \& NLP Bootcamp (Krish Naik)} \\
+
+    }}
+ \end{itemize}
+
+\end{document}

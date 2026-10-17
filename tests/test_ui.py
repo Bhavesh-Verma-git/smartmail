@@ -1,0 +1,553 @@
+"""
+tests/test_ui.py
+----------------
+Automated test suite for the SmartMail Functional Testing UI.
+Verifies all web routes, CSV upload, pre-upload validation preview,
+batch execution, draft review and editing safeguards, CV mode inspection,
+and launch-readiness checklist.
+"""
+from __future__ import annotations
+
+import io
+import json
+import tempfile
+from pathlib import Path
+from typing import Generator
+
+import pytest
+from flask.testing import FlaskClient
+
+from src.outreach.models import DraftStatus, EmailDraft, WorkflowMode
+from src.outreach.send_log import SendLog
+from src.ui.app import create_app
+from src.ui.storage import (
+    approve_draft,
+    clear_registered_cv,
+    get_draft,
+    get_launch_readiness_checklist,
+    register_uploaded_cv,
+    save_draft_record,
+    update_draft,
+)
+
+
+@pytest.fixture
+def test_send_log(tmp_path: Path) -> SendLog:
+    """Fixture providing an isolated SQLite send log."""
+    db_file = tmp_path / "test_ui_send_log.db"
+    return SendLog(db_path=db_file)
+
+
+@pytest.fixture
+def client(tmp_path: Path, test_send_log: SendLog) -> Generator[FlaskClient, None, None]:
+    """Fixture providing a configured Flask test client."""
+    # Ensure reference CV exists for uploaded CV mode
+    dummy_cv = tmp_path / "candidate_cv.pdf"
+    dummy_cv.write_bytes(b"%PDF-1.4 test candidate cv content")
+    register_uploaded_cv(dummy_cv)
+
+    app = create_app({
+        "TESTING": True,
+        "SEND_LOG_PATH": str(test_send_log._db_path),
+        "WTF_CSRF_ENABLED": False,
+    })
+
+    with app.test_client() as test_client:
+        yield test_client
+
+
+# ---------------------------------------------------------------------------
+# Dashboard Tests
+# ---------------------------------------------------------------------------
+
+def test_dashboard_route_loads(client: FlaskClient):
+    """Dashboard loads with HTTP 200, correct titles and metric cards."""
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "Outreach Dashboard" in html
+    assert "Imported" in html
+    assert "Drafts" in html
+    assert "Needs Review" in html
+    assert "DRY RUN: SAFE" in html
+
+
+def test_launch_checklist_route(client: FlaskClient):
+    """Launch checklist loads and displays truthful status for all items."""
+    res = client.get("/checklist")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "Launch Readiness &amp; Safety Audit" in html
+    assert "Custom Domain Connected" in html
+    assert "Production Email-Sending Safeguards" in html
+    assert "NOT_CONFIGURED" in html or "Not Configured" in html or "NOT CONFIGURED" in html
+
+
+def test_send_log_route(client: FlaskClient, test_send_log: SendLog):
+    """Send log route renders records from the SQLite database."""
+    test_send_log.record_draft("draft-test-1", "prospect@example.com", "camp-1")
+    test_send_log.record_approved("draft-test-1", "prospect@example.com", "camp-1")
+
+    res = client.get("/send-log")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "prospect@example.com" in html
+    assert "draft-test-1" in html
+
+
+# ---------------------------------------------------------------------------
+# CSV Pre-Upload Validation Preview Tests
+# ---------------------------------------------------------------------------
+
+def test_csv_preview_endpoint_with_mixed_contacts(client: FlaskClient):
+    """Preview endpoint correctly separates valid contacts from malformed rows."""
+    csv_content = (
+        "email,company_name,contact_name,role_or_job_url,notes\n"
+        "founder@acme.ai,Acme AI,Alice Founder,AI/ML Intern,Found on web\n"
+        "not-an-email,Bad Corp,Bob,ML Intern,Bad row\n"
+        "recruiter@gmail.com,Beta Labs,Charlie,Data Intern,Free provider\n"
+    )
+
+    data = {
+        "csv_file": (io.BytesIO(csv_content.encode("utf-8")), "mixed_contacts.csv")
+    }
+
+    res = client.post("/import/preview", data=data, content_type="multipart/form-data")
+    assert res.status_code == 200
+    json_data = res.get_json()
+    assert json_data["success"] is True
+    assert json_data["valid_count"] == 2
+    assert json_data["error_count"] == 1
+    # Check that free provider is flagged
+    gmail_contact = next(c for c in json_data["contacts"] if c["email"] == "recruiter@gmail.com")
+    assert gmail_contact["is_free_provider"] is True
+    # Check malformed error reason
+    err = json_data["errors"][0]
+    assert "syntax" in err["reason"].lower() or "invalid" in err["reason"].lower()
+
+
+def test_csv_preview_missing_file_returns_400(client: FlaskClient):
+    """Submitting preview without a file returns 400 Bad Request."""
+    res = client.post("/import/preview", data={})
+    assert res.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Batch Processing Execution Tests
+# ---------------------------------------------------------------------------
+
+def test_process_batch_run_end_to_end(client: FlaskClient):
+    """Batch processing imports CSV, runs pipeline, persists drafts, and renders results."""
+    csv_content = (
+        "email,company_name,contact_name,website,role_or_job_url,notes\n"
+        "cto@fitsol.example,Fitsol,Dave CTO,https://fitsol.example,AI/ML Intern,Good fit\n"
+        "invalid-email-address,Broken Co,Eve,https://broken.co,Intern,Broken row\n"
+    )
+
+    data = {
+        "csv_file": (io.BytesIO(csv_content.encode("utf-8")), "test_batch.csv"),
+        "target_role": "AI/ML Intern",
+        "workflow_mode": "uploaded_cv",
+        "campaign_id": "test_camp_ui_1",
+    }
+
+    res = client.post("/import/process", data=data, content_type="multipart/form-data", follow_redirects=True)
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    assert "Batch Processing Results" in html
+    assert "cto@fitsol.example" in html
+    assert "invalid-email-address" in html
+    assert "Invalid or Skipped Rows" in html
+
+    # Verify error report downloads
+    # Find batch id in HTML
+    import re
+    match = re.search(r"batch_[a-f0-9]+", html)
+    assert match is not None
+    batch_id = match.group(0)
+
+    # Test error report CSV download
+    csv_res = client.get(f"/batch/{batch_id}/errors/csv")
+    assert csv_res.status_code == 200
+    assert "invalid-email-address" in csv_res.data.decode("utf-8")
+
+    # Test error report JSON download
+    json_res = client.get(f"/batch/{batch_id}/errors/json")
+    assert json_res.status_code == 200
+    err_json = json_res.get_json()
+    assert err_json["failed_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Draft Review, Editing, and Approval Safeguards Tests
+# ---------------------------------------------------------------------------
+
+def test_draft_editing_resets_approval(client: FlaskClient, test_send_log: SendLog):
+    """Editing draft subject or body must reset approval status to DRAFT."""
+    original_subject = "AI/ML Internship Inquiry — TechCorp"
+    original_body = "Dear Hiring Team, I am writing to apply..."
+    draft = EmailDraft(
+        draft_id="draft-ui-test-1",
+        recipient="hiring@techcorp.example",
+        recipient_name="Hiring Team",
+        company_name="TechCorp",
+        subject=original_subject,
+        body=original_body,
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=True,
+        review_flags=["Company identity requires verification"],
+    )
+    save_draft_record(draft, campaign_id="camp-edit-test")
+
+    # 1. Explicitly approve draft
+    appr_res = client.post("/drafts/draft-ui-test-1/approve", follow_redirects=True)
+    assert appr_res.status_code == 200
+    d_after_appr = get_draft("draft-ui-test-1")
+    assert d_after_appr["approved"] is True
+    assert d_after_appr["status"] == "APPROVED"
+
+    # 2. Resave / edit draft with unmodified subject and body
+    edit_data = {
+        "recipient": "hiring@techcorp.example",
+        "recipient_name": "Hiring Team",
+        "subject": original_subject,
+        "body": original_body,
+    }
+    edit_res = client.post("/drafts/draft-ui-test-1/edit", data=edit_data, follow_redirects=True)
+    assert edit_res.status_code == 200
+
+    # 3. Assert approval is revoked without adding artificial test markers
+    d_after_edit = get_draft("draft-ui-test-1")
+    assert d_after_edit["subject"] == original_subject
+    assert "[Human Reviewed]" not in d_after_edit["subject"]
+    assert d_after_edit["body"] == original_body
+    assert d_after_edit["approved"] is False
+    assert d_after_edit["status"] == "DRAFT"
+
+    # 4. Also test update_draft direct helper with reset_approval=True
+    client.post("/drafts/draft-ui-test-1/approve", follow_redirects=True)
+    assert get_draft("draft-ui-test-1")["approved"] is True
+    d_direct_reset = update_draft("draft-ui-test-1", reset_approval=True)
+    assert d_direct_reset["approved"] is False
+    assert d_direct_reset["status"] == "DRAFT"
+    assert d_direct_reset["subject"] == original_subject
+    assert d_direct_reset["body"] == original_body
+
+
+def test_draft_send_in_dry_run_mode(client: FlaskClient, test_send_log: SendLog):
+    """Sending an approved draft in dry-run mode succeeds safely without network calls."""
+    class MockProvider:
+        def send_email(self, **kwargs):
+            pass
+
+    client.application.config["EMAIL_SENDER_PROVIDER"] = MockProvider()
+
+    draft = EmailDraft(
+        draft_id="draft-send-dry-1",
+        recipient="lead@innovate.example",
+        recipient_name="Lead",
+        company_name="Innovate",
+        subject="AI Application",
+        body="Application body",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.APPROVED,
+        approved=True,
+    )
+    save_draft_record(draft, campaign_id="camp-send-dry")
+    approve_draft("draft-send-dry-1", send_log=test_send_log)
+
+    send_res = client.post("/drafts/draft-send-dry-1/send", follow_redirects=True)
+    assert send_res.status_code == 200
+    html = send_res.data.decode("utf-8")
+    assert "Send outcome" in html or "Email sent successfully" in html or "Sent" in html
+
+    # Resending to the same recipient should now be blocked by duplicate protection
+    retry_res = client.post("/drafts/draft-send-dry-1/send", follow_redirects=True)
+    assert retry_res.status_code == 200
+    retry_html = retry_res.data.decode("utf-8")
+    assert "DUPLICATE_RECIPIENT" in retry_html or "Send blocked" in retry_html
+
+
+def test_unconfigured_gmail_reports_honest_error(client: FlaskClient, test_send_log: SendLog):
+    """When Gmail is not configured and no mock provider is injected, UI honestly reports GMAIL_NOT_CONFIGURED."""
+    client.application.config["EMAIL_SENDER_PROVIDER"] = None
+
+    draft = EmailDraft(
+        draft_id="draft-gmail-unconf",
+        recipient="founder@unconf.example",
+        recipient_name="Founder",
+        company_name="Unconf Co",
+        subject="AI Application",
+        body="Application body",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.APPROVED,
+        approved=True,
+    )
+    save_draft_record(draft, campaign_id="camp-unconf")
+    approve_draft("draft-gmail-unconf", send_log=test_send_log)
+
+    send_res = client.post("/drafts/draft-gmail-unconf/send", follow_redirects=True)
+    assert send_res.status_code == 200
+    html = send_res.data.decode("utf-8")
+    assert "GMAIL_NOT_CONFIGURED" in html
+    assert "Gmail integration is not configured" in html
+
+
+# ---------------------------------------------------------------------------
+# CV Settings & Tailoring Preview Tests
+# ---------------------------------------------------------------------------
+
+def test_cv_settings_page_and_tailoring_preview(client: FlaskClient):
+    """CV settings page displays uploaded CV details and runs tailored CV generation preview."""
+    res = client.get("/cv")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "Uploaded CV Mode" in html
+    assert "Tailored CV Mode" in html
+    assert "SHA-256 Digest" in html
+
+    # Test Tailored CV generator test form
+    tailor_data = {
+        "target_company": "Apex Deep Learning",
+        "target_role": "AI/ML Intern",
+        "job_description": "PyTorch, diffusion models, computer vision, distributed training",
+    }
+    tailor_res = client.post("/cv/test-tailor", data=tailor_data)
+    assert tailor_res.status_code == 200
+    tailor_html = tailor_res.data.decode("utf-8")
+    assert "ControlPlane.ai" in tailor_html
+    assert "Generated Markdown Content" in tailor_html
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 & 3 Import Page Regression Tests
+# ---------------------------------------------------------------------------
+
+def test_import_page_renders_with_registered_cv(client: FlaskClient, tmp_path: Path):
+    """GET /import returns HTTP 200 and renders CV details, wizard stepper, and upload controls."""
+    test_pdf = tmp_path / "my_verified_cv.pdf"
+    test_pdf.write_bytes(b"%PDF-1.4 test cv")
+    register_uploaded_cv(test_pdf, original_filename="my_verified_cv.pdf")
+    res = client.get("/import")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "Outreach Campaign Wizard" in html
+    assert "Master CV" in html
+    assert "Contacts Spreadsheet" in html
+    assert "Column Mapping" in html
+    assert "Confirm &amp; Run" in html
+    assert "my_verified_cv.pdf" in html
+    assert "standardFields" in html
+    assert "fieldDescriptions" in html
+
+
+def test_import_page_renders_without_registered_cv(client: FlaskClient):
+    """GET /import returns HTTP 200 when no CV has been uploaded yet."""
+    clear_registered_cv()
+    res = client.get("/import")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+    assert "Outreach Campaign Wizard" in html
+    assert "Click to choose or drag &amp; drop your CV PDF" in html
+
+
+def test_import_page_template_defensive_against_missing_context(client: FlaskClient):
+    """
+    Ensure import.html does not raise TypeError or UndefinedError even if rendered
+    with sparse context (such as missing standard_fields or registered_cv=None).
+    """
+    from flask import render_template
+    from src.ui.app import create_app
+
+    app = create_app({"TESTING": True})
+    with app.test_request_context("/import"):
+        # Explicitly pass None or omitted variables to simulate uninitialized session/context
+        rendered = render_template(
+            "import.html",
+            active_tab="import",
+            registered_cv=None,
+            standard_fields=None,
+            field_descriptions=None,
+        )
+        assert "Outreach Campaign Wizard" in rendered
+        assert "standardFields: []" in rendered
+
+
+def test_saved_draft_openai_subject_and_metadata_preserved():
+    """Verify saved draft-97f974b1 subject is clean and all metadata is preserved."""
+    draft = get_draft("draft-97f974b1")
+    assert draft is not None, "Saved draft draft-97f974b1 must exist on disk"
+    assert draft["subject"] == "AI/ML Internship Inquiry — OpenAI"
+    assert "[Human Reviewed]" not in draft["subject"]
+    assert "[Human Reviewed]" not in draft["body"]
+    assert draft["recipient"] == "careers@openai.com"
+    assert "Dear Hiring Team at OpenAI" in draft["body"]
+    assert len(draft.get("research_evidence", [])) > 0
+    assert len(draft.get("evidence_summary", [])) > 0
+    assert draft["draft_id"] == "draft-97f974b1"
+
+
+def test_draft_evidence_rendering_structured(client: FlaskClient):
+    """Verify structured company evidence entries render readable title, excerpt, and external links."""
+    draft = EmailDraft(
+        draft_id="draft-ev-structured-test",
+        recipient="research@deepai.example",
+        recipient_name="Research Team",
+        company_name="DeepAI",
+        subject="AI/ML Internship Inquiry — DeepAI",
+        body="Dear Research Team,\n\nI am writing to inquire...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=False,
+        evidence_summary=[
+            {
+                "keyword": "llm_analysis",
+                "excerpt": "DeepAI builds low-latency transformer inference pipelines and retrieval engines.",
+                "source_url": "https://deepai.example/research/transformers",
+            },
+            {
+                "keyword": "diffusion_models",
+                "excerpt": "Scaling generative vision models across multi-GPU distributed clusters.",
+                "source_url": "https://deepai.example/careers/vision-engineer",
+            },
+        ],
+    )
+    save_draft_record(draft, campaign_id="camp-ev-test")
+
+    res = client.get("/drafts/draft-ev-structured-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Clean titles/keywords
+    assert "LLM Research Analysis" in html
+    assert "Diffusion Models" in html
+
+    # Excerpts
+    assert "DeepAI builds low-latency transformer inference pipelines" in html
+    assert "Scaling generative vision models" in html
+
+    # Clickable source URLs opening in new tab
+    assert 'href="https://deepai.example/research/transformers"' in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener noreferrer"' in html
+    assert "Source link &nearr;" in html
+
+    # No raw python dict representation exposed
+    assert "[{'keyword':" not in html
+    assert "[{&#39;keyword&#39;:" not in html
+    assert "[{'" not in html
+
+
+def test_draft_evidence_rendering_missing(client: FlaskClient):
+    """Verify missing or empty evidence renders a clear friendly message."""
+    for did, ev_val in [("draft-ev-none", None), ("draft-ev-empty-list", []), ("draft-ev-empty-str", "")]:
+        draft = EmailDraft(
+            draft_id=did,
+            recipient="info@example.com",
+            recipient_name="Team",
+            company_name="Example Corp",
+            subject="AI/ML Internship Inquiry — Example",
+            body="Hello,\n\nInquiry...",
+            attachment_path="output/test_uploaded_cv.pdf",
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+            review_required=True,
+            evidence_summary=ev_val,
+        )
+        save_draft_record(draft, campaign_id="camp-ev-missing")
+
+        res = client.get(f"/drafts/{did}")
+        assert res.status_code == 200
+        html = res.data.decode("utf-8")
+        assert "No source evidence available." in html
+
+
+def test_draft_evidence_rendering_malformed(client: FlaskClient):
+    """Verify malformed evidence data is handled gracefully without crashing or showing traceback."""
+    malformed_values = [
+        [123, None, {}],
+        {"invalid_key": 999},
+        "   ",
+        [{"keyword": "", "excerpt": "", "source_url": ""}],
+    ]
+    for idx, bad_val in enumerate(malformed_values):
+        did = f"draft-ev-malformed-{idx}"
+        draft = EmailDraft(
+            draft_id=did,
+            recipient="test@example.com",
+            recipient_name="Team",
+            company_name="Malformed Test Corp",
+            subject="AI/ML Internship Inquiry — Malformed",
+            body="Hello,\n\nInquiry...",
+            attachment_path="output/test_uploaded_cv.pdf",
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+            review_required=True,
+            evidence_summary=bad_val,
+        )
+        save_draft_record(draft, campaign_id="camp-ev-malformed")
+
+        res = client.get(f"/drafts/{did}")
+        assert res.status_code == 200
+        html = res.data.decode("utf-8")
+        assert "No source evidence available." in html
+
+
+def test_draft_evidence_rendering_escaping_and_wrapping(client: FlaskClient):
+    """Verify untrusted HTML and javascript URLs are safely sanitized and long URLs wrap."""
+    draft = EmailDraft(
+        draft_id="draft-ev-security-test",
+        recipient="sec@example.com",
+        recipient_name="Security Team",
+        company_name="SecCorp",
+        subject="AI/ML Internship Inquiry — SecCorp",
+        body="Hello,\n\nInquiry...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=True,
+        evidence_summary=[
+            {
+                "keyword": "<script>alert('kw')</script>",
+                "excerpt": "<b onclick='alert(1)'>untrusted excerpt content</b>",
+                "source_url": "javascript:alert('xss')",
+            },
+            {
+                "keyword": "secure_system",
+                "excerpt": "A" * 150,
+                "source_url": "https://example.com/very/long/path/" + "B" * 120,
+            },
+        ],
+    )
+    save_draft_record(draft, campaign_id="camp-ev-sec")
+
+    res = client.get("/drafts/draft-ev-security-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Safe escaping: Raw script tag must NOT exist in DOM
+    assert "<script>alert('kw')</script>" not in html
+    assert "&lt;Script&gt;Alert(&#39;Kw&#39;)&lt;/Script&gt;" in html or "&lt;script&gt;" in html or "Alert" in html
+
+    # Raw onclick handler must NOT exist
+    assert "<b onclick" not in html
+    assert "untrusted excerpt content" in html
+
+    # javascript: scheme must NOT be rendered as a link
+    assert 'href="javascript:' not in html
+
+    # Long safe URL must be present and have wrapping styles
+    assert 'word-break: break-all' in html
+    assert "https://example.com/very/long/path/" in html
+

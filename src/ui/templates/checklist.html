@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Launch Readiness &amp; Safety Audit — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Launch Readiness &amp; Safety Audit</h1>
+    <p class="page-subtitle">
+      Truthful operational checklist. Differentiates local testing readiness from public production requirements.
+    </p>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: 2rem;">
+  <div class="card-header">
+    <h2 class="card-title">Production Readiness Assessment</h2>
+    <span style="font-size: 0.8rem; color: var(--text-dim);">9 Verification Criteria</span>
+  </div>
+
+  <p style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1.5rem;">
+    SmartMail adheres to strict honesty: items below reflect the genuine technical status of the current deployment. No placeholder assurances or simulated certifications are presented.
+  </p>
+
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Checklist Item</th>
+          <th>Status</th>
+          <th>Technical Assessment &amp; Next Steps</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in checklist %}
+          <tr>
+            <td>
+              <span class="badge badge-neutral" style="font-size:0.7rem; text-transform:uppercase;">
+                {{ item.category }}
+              </span>
+            </td>
+            <td>
+              <strong>{{ item.name }}</strong>
+            </td>
+            <td>
+              {% if item.status == 'COMPLETED' or item.status == 'VERIFIED_TESTED' %}
+                <span class="badge badge-success"><span class="badge-dot"></span>{{ item.status.replace('_', ' ') }}</span>
+              {% elif item.status == 'DOCUMENTED' or item.status == 'SECURE_LOCAL_ENV' %}
+                <span class="badge badge-info"><span class="badge-dot"></span>{{ item.status.replace('_', ' ') }}</span>
+              {% elif item.status == 'LOCAL_LOOPBACK_BOUND' or item.status == 'EVALUATED_LOCAL_ONLY' %}
+                <span class="badge badge-warning"><span class="badge-dot"></span>{{ item.status.replace('_', ' ') }}</span>
+              {% else %}
+                <span class="badge badge-neutral"><span class="badge-dot"></span>{{ item.status.replace('_', ' ') }}</span>
+              {% endif %}
+            </td>
+            <td style="font-size: 0.825rem; color: var(--text-muted); max-width: 500px;">
+              {{ item.details }}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid-2">
+  <!-- Privacy & Data Protection -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Privacy &amp; Data Protection</h2>
+    </div>
+    <div style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.6;">
+      <p style="margin-bottom: 0.75rem;">
+        <strong>Local Data Residency:</strong> All imported contact CSVs, research evidence, and draft emails remain strictly on your local disk in <code>output/</code> and <code>data/</code>. No prospect contact details are transmitted to external marketing services or third-party servers.
+      </p>
+      <p>
+        <strong>Credential Protection:</strong> Google OAuth client secrets and user tokens are stored solely in filesystem paths specified by local environment variables (<code>GMAIL_CREDENTIALS_PATH</code>, <code>GMAIL_TOKEN_PATH</code>). They are never accepted, echoed, or modified through the web interface.
+      </p>
+    </div>
+  </div>
+
+  <!-- Public Launch Path -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Path to Public Deployment</h2>
+    </div>
+    <div style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.6;">
+      <p style="margin-bottom: 0.75rem;">
+        Before this testing application can be deployed to a public URL or used beyond local loopback:
+      </p>
+      <ul style="padding-left: 1.25rem; font-size: 0.825rem;">
+        <li>Multi-user authentication (e.g. session auth, OAuth2) must be implemented.</li>
+        <li>A secure reverse-proxy (e.g. Nginx, Cloudflare) with HTTPS/TLS must terminate traffic.</li>
+        <li>Legal Privacy Policy and Terms of Service documents must be formally reviewed and published.</li>
+        <li>Google OAuth app verification must be approved for restricted Gmail API scopes.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

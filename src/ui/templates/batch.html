@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+
+{% block title %}Batch Results — {{ batch.campaign_id or batch.batch_id[:12] }} — SmartMail{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Batch Processing Results</h1>
+    <p class="page-subtitle">
+      Campaign: <strong>{{ batch.campaign_id or 'Default' }}</strong> &bull; Batch ID: <code>{{ batch.batch_id }}</code> &bull; Mode: <code>{{ batch.mode }}</code>
+    </p>
+  </div>
+  <div class="header-actions">
+    <a href="{{ url_for('download_batch_errors_csv', batch_id=batch.batch_id) }}" class="btn btn-secondary btn-sm" title="Download invalid rows and reasons as CSV">
+      Download Error Report (CSV)
+    </a>
+    <a href="{{ url_for('download_batch_errors_json', batch_id=batch.batch_id) }}" class="btn btn-secondary btn-sm" title="Download invalid rows and reasons as JSON">
+      Download Error Report (JSON)
+    </a>
+    <a href="{{ url_for('review_queue') }}" class="btn btn-primary btn-sm">
+      Go to Review Queue ({{ batch.drafted_count }})
+    </a>
+  </div>
+</div>
+
+<!-- Summary Metrics (Stage 3 Enhanced) -->
+<div class="stats-row">
+  <div class="stat-item">
+    <span class="stat-label">Input Rows</span>
+    <span class="stat-value">{{ batch.total_rows }}</span>
+    <span class="stat-desc">Total source rows</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Confident</span>
+    <span class="stat-value" style="color:#4ade80;">{{ batch.confident_count or 0 }}</span>
+    <span class="stat-desc">Outreach ready</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Review Name</span>
+    <span class="stat-value" style="color:#fbbf24;">{{ batch.review_name_count or 0 }}</span>
+    <span class="stat-desc">Generic / unverified name</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Other Review</span>
+    <span class="stat-value" style="color:var(--text-secondary);">{{ batch.other_review_count or 0 }}</span>
+    <span class="stat-desc">Requires human check</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Not AI Relevant</span>
+    <span class="stat-value" style="color:var(--text-muted);">{{ batch.not_ai_relevant_count or 0 }}</span>
+    <span class="stat-desc">No AI/ML focus</span>
+  </div>
+
+  <div class="stat-item">
+    <span class="stat-label">Eliminated</span>
+    <span class="stat-value" style="color:#f87171;">{{ batch.eliminated_count or 0 }}</span>
+    <span class="stat-desc">Unresolvable / blocked</span>
+  </div>
+</div>
+
+<!-- Errors & Skipped Rows Panel (If Any) -->
+{% if batch.errors %}
+<div class="card" style="margin-bottom: 2rem; border-color: rgba(239, 68, 68, 0.3);">
+  <div class="card-header">
+    <h2 class="card-title" style="color: #f87171;">
+      <span>Invalid or Skipped Rows ({{ batch.errors|length }})</span>
+    </h2>
+    <span style="font-size: 11px; color: var(--text-dim);">These rows had syntax or import defects and were excluded from research.</span>
+  </div>
+
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Row #</th>
+          <th>Input Value / Identifier</th>
+          <th>Rejection Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for err in batch.errors %}
+          <tr>
+            <td>{{ err.row_number }}</td>
+            <td>
+              <code>{{ err.email or err.raw_row.email or err.raw_row or 'Malformed row' }}</code>
+            </td>
+            <td>
+              <span class="badge badge-error">{{ err.reason or err.error }}</span>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Per-Contact Pipeline & Research Outcomes -->
+<div class="card">
+  <!-- Filter Tabs Bar -->
+  <div class="filter-bar">
+    <button type="button" class="filter-pill active" data-filter="all">
+      All <span class="pill-count">{{ batch.results|length }}</span>
+    </button>
+    <button type="button" class="filter-pill" data-filter="CONFIDENT">
+      Confident <span class="pill-count">{{ batch.confident_count or 0 }}</span>
+    </button>
+    <button type="button" class="filter-pill" data-filter="REVIEW_NAME">
+      Review Name <span class="pill-count">{{ batch.review_name_count or 0 }}</span>
+    </button>
+    <button type="button" class="filter-pill" data-filter="OTHER_REVIEW">
+      Other Review <span class="pill-count">{{ batch.other_review_count or 0 }}</span>
+    </button>
+    <button type="button" class="filter-pill" data-filter="NOT_AI_RELEVANT">
+      Not AI Relevant <span class="pill-count">{{ batch.not_ai_relevant_count or 0 }}</span>
+    </button>
+    <button type="button" class="filter-pill" data-filter="ELIMINATED">
+      Eliminated <span class="pill-count">{{ batch.eliminated_count or 0 }}</span>
+    </button>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table-main" id="batchResultsTable">
+      <thead>
+        <tr>
+          <th style="width: 50px;">Row</th>
+          <th style="min-width: 180px;">Email &amp; Company</th>
+          <th style="min-width: 140px;">Recipient</th>
+          <th style="min-width: 110px;">AI/ML Focus</th>
+          <th style="min-width: 120px;">Classification</th>
+          <th style="min-width: 220px;">Reason &amp; Assessment</th>
+          <th style="min-width: 140px; text-align: right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in batch.results %}
+          {% set c_outcome = r.classification or r.status %}
+          {% set filter_cat = 'CONFIDENT' if c_outcome == 'CONFIDENT' else ('REVIEW_NAME' if c_outcome == 'REVIEW_NAME' else ('NOT_AI_RELEVANT' if c_outcome == 'NOT_AI_RELEVANT' else ('ELIMINATED' if (c_outcome == 'ELIMINATED' or r.status == 'BLOCKED') else 'OTHER_REVIEW'))) %}
+          <tr class="contact-row" data-classification="{{ filter_cat }}">
+            <td style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">
+              #{{ r.row_number }}
+            </td>
+            <td>
+              <div class="cell-email" title="{{ r.contact_email }}">
+                <strong>{{ r.contact_email }}</strong>
+              </div>
+              <div class="cell-company" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                {{ r.resolved_company or r.company_name or 'Unknown Company' }}
+                {% if r.supplied_company and r.resolved_company and r.supplied_company.lower() != r.resolved_company.lower() %}
+                  <span style="font-size: 10px; color: var(--text-dim);" title="Entered as: {{ r.supplied_company }}">
+                    (as: {{ r.supplied_company }})
+                  </span>
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              {% if r.recipient_name %}
+                <div style="font-weight: 500; font-size: 13px;">{{ r.recipient_name }}</div>
+                <div style="margin-top: 2px;">
+                  {% if r.recipient_status == 'VERIFIED' %}
+                    <span class="badge badge-proceed" style="font-size: 9px; padding: 1px 5px;">Verified Name</span>
+                  {% elif r.is_generic_inbox or r.recipient_status == 'GENERIC_INBOX' %}
+                    <span class="badge badge-generic" style="font-size: 9px; padding: 1px 5px;">Generic Inbox</span>
+                  {% elif r.recipient_status == 'INFERRED' %}
+                    <span class="badge badge-neutral" style="font-size: 9px; padding: 1px 5px;">Inferred</span>
+                  {% else %}
+                    <span class="badge badge-neutral" style="font-size: 9px; padding: 1px 5px;">Unverified</span>
+                  {% endif %}
+                </div>
+              {% else %}
+                <span style="font-size: 11px; color: var(--text-dim);">Unknown / Generic</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if r.ai_ml_relevant %}
+                <span class="badge badge-confident" title="Verified AI/ML technical work detected">
+                  <span class="badge-dot"></span>Relevant
+                </span>
+              {% elif c_outcome == 'NOT_AI_RELEVANT' %}
+                <span class="badge badge-not-ai" title="No substantive AI/ML engineering found">
+                  <span class="badge-dot"></span>Not AI
+                </span>
+              {% else %}
+                <span class="badge badge-review-name" title="Evidence unverified or pending review">
+                  <span class="badge-dot"></span>Uncertain
+                </span>
+              {% endif %}
+            </td>
+            <td>
+              {% if c_outcome == 'CONFIDENT' %}
+                <span class="badge badge-confident">
+                  <span class="badge-dot"></span>CONFIDENT
+                </span>
+              {% elif c_outcome == 'REVIEW_NAME' %}
+                <span class="badge badge-review-name">
+                  <span class="badge-dot"></span>REVIEW NAME
+                </span>
+              {% elif c_outcome == 'NOT_AI_RELEVANT' %}
+                <span class="badge badge-not-ai">
+                  <span class="badge-dot"></span>NOT AI
+                </span>
+              {% elif c_outcome == 'ELIMINATED' or r.status == 'BLOCKED' %}
+                <span class="badge badge-eliminated">
+                  <span class="badge-dot"></span>ELIMINATED
+                </span>
+              {% else %}
+                <span class="badge badge-review">
+                  <span class="badge-dot"></span>REVIEW
+                </span>
+              {% endif %}
+            </td>
+            <td style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
+              <div>{{ r.reason_summary or r.message }}</div>
+              {% if r.error %}
+                <div style="color: #f87171; font-size: 11px; margin-top: 2px;">{{ r.error }}</div>
+              {% endif %}
+            </td>
+            <td style="text-align: right; white-space: nowrap;">
+              <button type="button" class="btn btn-secondary btn-sm inspect-evidence-btn"
+                      data-contact="{{ r|tojson|forceescape }}">
+                Evidence
+              </button>
+              {% if r.draft_id %}
+                <a href="{{ url_for('view_draft', draft_id=r.draft_id) }}" class="btn btn-secondary btn-sm" style="margin-left: 4px;">
+                  Draft
+                </a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Slide-over Evidence Inspection Modal -->
+<div class="evidence-modal-backdrop" id="evidenceModalBackdrop">
+  <div class="evidence-modal">
+    <div class="evidence-modal-header">
+      <div>
+        <div class="evidence-modal-title" id="modalContactEmail">contact@example.com</div>
+        <div class="evidence-modal-subtitle" id="modalCompany">Company Name</div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="modalCloseBtn">&times; Close</button>
+    </div>
+
+    <div class="evidence-modal-body">
+      <!-- 1. Classification & Advisory Status -->
+      <div class="evidence-section">
+        <div class="evidence-section-header">
+          <span>Stage 3 Classification Assessment</span>
+          <span id="modalClassificationBadge" class="badge">CONFIDENT</span>
+        </div>
+        <div class="evidence-card">
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Reason Code:</span>
+            <span class="evidence-field-val" id="modalReasonCode" style="font-family: var(--font-mono);">CONFIDENT</span>
+          </div>
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Summary Reason:</span>
+            <span class="evidence-field-val" id="modalReasonSummary" style="max-width: 75%; text-align: right;">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Company & Recipient Identity Evidence -->
+      <div class="evidence-section">
+        <div class="evidence-section-header">
+          <span>Identity Verification Breakdown</span>
+        </div>
+        <div class="evidence-card">
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Resolved Company:</span>
+            <span class="evidence-field-val" id="modalResolvedCompany">-</span>
+          </div>
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Supplied Company (Input):</span>
+            <span class="evidence-field-val" id="modalSuppliedCompany">-</span>
+          </div>
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Recipient Name:</span>
+            <span class="evidence-field-val" id="modalRecipientName">-</span>
+          </div>
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Name Verification Status:</span>
+            <span class="evidence-field-val" id="modalRecipientStatus">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Company AI/ML Focus & Candidate Alignment -->
+      <div class="evidence-section">
+        <div class="evidence-section-header">
+          <span>Technical Focus &amp; Candidate CV Match</span>
+        </div>
+        <div class="evidence-card">
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">Company AI/ML Areas:</span>
+            <span class="evidence-field-val" id="modalMatchedAreas">-</span>
+          </div>
+          <div class="evidence-field-row">
+            <span class="evidence-field-label">AI/ML Relevance Supported:</span>
+            <span class="evidence-field-val" id="modalAimlRelevance">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Contradictions / Retrieval Failures (If any) -->
+      <div class="evidence-section" id="modalContradictionsSection" style="display: none;">
+        <div class="evidence-section-header">
+          <span style="color: #f87171;">Contradictions &amp; Caveats</span>
+        </div>
+        <div class="contradiction-box" id="modalContradictionsText"></div>
+      </div>
+
+      <!-- 5. Retrieved Evidence Sources & Excerpts -->
+      <div class="evidence-section">
+        <div class="evidence-section-header">
+          <span>Retrieved Web Evidence &amp; Sources (<span id="modalEvidenceCount">0</span>)</span>
+        </div>
+        <div id="modalEvidenceItemsContainer">
+          <p style="font-size: 12px; color: var(--text-dim);">No specific web pages were retrieved for this record.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Filter tabs logic
+  const filterPills = document.querySelectorAll('.filter-pill');
+  const rows = document.querySelectorAll('.contact-row');
+
+  filterPills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      filterPills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+
+      const filter = pill.getAttribute('data-filter');
+      rows.forEach(r => {
+        if (filter === 'all' || r.getAttribute('data-classification') === filter) {
+          r.style.display = '';
+        } else {
+          r.style.display = 'none';
+        }
+      });
+    });
+  });
+
+  // Evidence modal logic
+  const modalBackdrop = document.getElementById('evidenceModalBackdrop');
+  const modalCloseBtn = document.getElementById('modalCloseBtn');
+
+  function closeModal() {
+    modalBackdrop.classList.remove('open');
+  }
+
+  modalCloseBtn.addEventListener('click', closeModal);
+  modalBackdrop.addEventListener('click', (e) => {
+    if (e.target === modalBackdrop) closeModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalBackdrop.classList.contains('open')) closeModal();
+  });
+
+  document.querySelectorAll('.inspect-evidence-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dataStr = btn.getAttribute('data-contact');
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+
+      document.getElementById('modalContactEmail').textContent = data.contact_email;
+      document.getElementById('modalCompany').textContent = data.resolved_company || data.company_name || 'Unknown Company';
+      
+      const badge = document.getElementById('modalClassificationBadge');
+      badge.textContent = data.classification || data.status;
+      badge.className = 'badge';
+      if (data.classification === 'CONFIDENT') badge.classList.add('badge-confident');
+      else if (data.classification === 'REVIEW_NAME') badge.classList.add('badge-review-name');
+      else if (data.classification === 'NOT_AI_RELEVANT') badge.classList.add('badge-not-ai');
+      else if (data.classification === 'ELIMINATED') badge.classList.add('badge-eliminated');
+      else badge.classList.add('badge-review');
+
+      document.getElementById('modalReasonCode').textContent = data.reason_code || '-';
+      document.getElementById('modalReasonSummary').textContent = data.reason_summary || data.message || '-';
+
+      document.getElementById('modalResolvedCompany').textContent = data.resolved_company || data.company_name || '-';
+      document.getElementById('modalSuppliedCompany').textContent = data.supplied_company || '(None supplied)';
+      
+      let recNameStr = data.recipient_name || '(Unknown)';
+      if (data.inferred_name && data.inferred_name !== data.recipient_name) {
+        recNameStr += ' (Inferred from email: ' + data.inferred_name + ')';
+      }
+      document.getElementById('modalRecipientName').textContent = recNameStr;
+      
+      let recStatStr = data.recipient_status || 'UNKNOWN';
+      if (data.is_generic_inbox) recStatStr += ' (Generic Inbox)';
+      document.getElementById('modalRecipientStatus').textContent = recStatStr;
+
+      const areas = data.matched_areas || [];
+      document.getElementById('modalMatchedAreas').textContent = areas.length ? areas.join(', ') : 'No confirmed AI/ML technical subdisciplines';
+      document.getElementById('modalAimlRelevance').textContent = data.ai_ml_relevant ? 'Yes (Evidence-backed AI/ML work)' : (data.classification === 'NOT_AI_RELEVANT' ? 'No (Not AI/ML focused)' : 'Uncertain (Insufficient evidence)');
+
+      // Contradictions
+      const contraSection = document.getElementById('modalContradictionsSection');
+      const contraText = document.getElementById('modalContradictionsText');
+      if (data.contradictions && data.contradictions.length > 0) {
+        contraSection.style.display = 'block';
+        contraText.innerHTML = data.contradictions.map(c => '<div>&bull; ' + c + '</div>').join('');
+      } else {
+        contraSection.style.display = 'none';
+      }
+
+      // Evidence items
+      const container = document.getElementById('modalEvidenceItemsContainer');
+      container.innerHTML = '';
+      const items = data.evidence_items || [];
+      document.getElementById('modalEvidenceCount').textContent = items.length;
+
+      if (items.length === 0) {
+        container.innerHTML = '<p style="font-size: 12px; color: var(--text-dim); padding: 0.5rem 0;">No external web pages were retrieved for this contact.</p>';
+      } else {
+        items.forEach(it => {
+          const card = document.createElement('div');
+          card.className = 'evidence-item-card';
+
+          const retStatus = it.retrieval_status || 'OK';
+          let statusBadgeClass = 'badge-proceed';
+          if (retStatus === 'BLOCKED') statusBadgeClass = 'badge-blocked';
+          else if (retStatus === 'EMPTY' || retStatus === 'JS_ONLY') statusBadgeClass = 'badge-neutral';
+          else if (retStatus === 'NETWORK_ERROR' || retStatus === 'ERROR') statusBadgeClass = 'badge-error';
+
+          card.innerHTML = `
+            <div class="evidence-item-header">
+              <div>
+                <a href="${it.source_url}" target="_blank" rel="noopener noreferrer" class="evidence-source-link">
+                  ${it.source_url}
+                </a>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                  Type: <code>${it.source_type || 'web_page'}</code> &bull; Title: <em>${it.title || 'Untitled'}</em>
+                </div>
+              </div>
+              <span class="badge ${statusBadgeClass}" style="font-size: 10px;">${retStatus}</span>
+            </div>
+            ${it.claim_supported ? `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;"><strong>Claim Supported:</strong> ${it.claim_supported}</div>` : ''}
+            ${it.extracted_text ? `<div class="evidence-excerpt">${it.extracted_text}</div>` : ''}
+          `;
+          container.appendChild(card);
+        });
+      }
+
+      modalBackdrop.classList.add('open');
+    });
+  });
+</script>
+{% endblock %}
