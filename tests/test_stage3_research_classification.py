@@ -470,8 +470,31 @@ class TestHttpRetrievalEdgeCases:
             summary="Review needed",
         )
         clf = classify_contact(res, p_res, original_email="lead@flaky-server.example")
-        assert clf.primary_outcome in ("REVIEW", "REVIEW_NAME")
+        assert clf.primary_outcome == "REVIEW"
         assert clf.reason_code == REASON_RESEARCH_FAILED
+
+    def test_ai_relevance_uncertain_yields_review_outcome_not_review_name(self):
+        """When AI relevance is ambiguous, primary_outcome is REVIEW, not REVIEW_NAME."""
+        from src.verification.classifier import CLASSIFICATION_REVIEW, REASON_AI_RELEVANCE_UNCERTAIN
+        res = ResearchResult(
+            company_name="Ambiguous Tech Corp",
+            resolved_company_name="Ambiguous Tech Corp",
+            company_identity_status="SUPPORTED",
+            evidence=[],
+        )
+        v_res = VerificationResult(
+            company_status="VERIFIED",
+            contact_status="VERIFIED",
+            overall_status="PROCEED",
+        )
+        p_res = PipelineResult(
+            verification=v_res,
+            match=MatchResult(relevance_status="REVIEW", case_type="GENERAL_INQUIRY", matched_areas=[], profile_evidence=[], explanation=""),
+            summary="AI relevance uncertain",
+        )
+        clf = classify_contact(res, p_res, original_email="alice@ambiguous-tech.example")
+        assert clf.primary_outcome == CLASSIFICATION_REVIEW
+        assert clf.reason_code == REASON_AI_RELEVANCE_UNCERTAIN
 
 
 # ---------------------------------------------------------------------------

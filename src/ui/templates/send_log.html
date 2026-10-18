@@ -77,6 +77,8 @@
               <td>
                 {% if e.status == 'SUCCESS' %}
                   <span class="badge badge-success"><span class="badge-dot"></span>SUCCESS</span>
+                {% elif e.status == 'SIMULATED' %}
+                  <span class="badge badge-info"><span class="badge-dot"></span>SIMULATED</span>
                 {% elif e.status == 'APPROVED' %}
                   <span class="badge badge-proceed"><span class="badge-dot"></span>APPROVED</span>
                 {% elif e.status == 'DRAFT' %}
@@ -107,7 +109,9 @@
               </td>
               <td style="font-size: 12px; line-height: 1.35;">
                 {% if e.status == 'SUCCESS' %}
-                  <span style="color:#f87171; font-weight:500;">Resend Blocked (Duplicate Safe)</span>
+                  <span style="color:#f87171; font-weight:500;">Live Sent — Resend Blocked</span>
+                {% elif e.status == 'SIMULATED' %}
+                  <span style="color:#60a5fa; font-weight:500;">Simulated Send (Dry Run)</span>
                 {% elif e.status == 'UNCERTAIN' %}
                   <span style="color:#fbbf24; font-weight:500;">Reconciliation Required</span>
                 {% elif e.status == 'APPROVED' %}

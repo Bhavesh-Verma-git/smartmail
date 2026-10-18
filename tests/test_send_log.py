@@ -16,6 +16,7 @@ from src.outreach.send_log import (
     STATUS_DRAFT,
     STATUS_APPROVED,
     STATUS_SUCCESS,
+    STATUS_SIMULATED,
     STATUS_FAILED,
     STATUS_UNCERTAIN,
 )
@@ -84,6 +85,16 @@ class TestSendLogStateTransitions:
         assert send_log.get_status("draft-005") == STATUS_UNCERTAIN
         assert send_log.has_uncertain_send("dave@example.com")
         assert not send_log.was_successfully_sent("dave@example.com")
+
+    def test_record_simulated(self, send_log: SendLog):
+        send_log.record_draft("draft-006", "sim@example.com")
+        send_log.record_simulated("draft-006", "sim@example.com", campaign_id="camp-dry")
+        assert send_log.get_status("draft-006") == STATUS_SIMULATED
+        assert send_log.was_simulated("sim@example.com", campaign_id="camp-dry")
+        # Simulated send must NOT be treated as confirmed live send
+        assert not send_log.was_successfully_sent("sim@example.com", campaign_id="camp-dry")
+        # But has_any_send detects both
+        assert send_log.has_any_send("sim@example.com", campaign_id="camp-dry")
 
 
 class TestDuplicatePrevention:

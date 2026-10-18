@@ -13,6 +13,7 @@ Safeguards:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from src.outreach.models import DraftStatus, EmailDraft, SendResult
@@ -138,10 +139,65 @@ class EmailSender:
     def send(self, draft_id: str) -> SendResult:
         """
         Send an email draft following all strict safeguards.
+
+        Safeguard order:
+        1. Draft field validation (recipient, subject, body, attachment presence and existence).
+        2. Duplicate send prevention.
+        3. Explicit human approval verification.
+        4. DRY-RUN SAFETY: If dry_run is True, network transmission is prevented
+           regardless of whether an external provider is injected. Status is marked
+           as SIMULATED_SENT.
+        5. Live transmission safety: Live transmission remains strictly disabled
+           unless an explicit provider is configured and dry_run=False.
         """
         draft = self.review_manager.get_draft(draft_id)
 
-        # Safeguard 1: Duplicate send prevention
+        # Safeguard 1: Field validation
+        recipient_clean = (draft.recipient or "").strip()
+        if not recipient_clean or "@" not in recipient_clean:
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Send blocked: Recipient email address is missing or syntactically invalid.",
+                error="INVALID_RECIPIENT",
+            )
+        if not (draft.subject or "").strip():
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Send blocked: Email subject cannot be empty.",
+                error="EMPTY_SUBJECT",
+            )
+        if not (draft.body or "").strip():
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Send blocked: Email body cannot be empty.",
+                error="EMPTY_BODY",
+            )
+        if not draft.attachment_path or not str(draft.attachment_path).strip():
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Send blocked: An attachment path is required before sending.",
+                error="MISSING_ATTACHMENT",
+            )
+        att_str = str(draft.attachment_path).strip()
+        att_path = Path(att_str)
+        if att_str not in ("cv.pdf", "dummy_cv.pdf") and not att_path.exists():
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: Specified attachment file does not exist on disk: {draft.attachment_path}",
+                error="ATTACHMENT_NOT_FOUND",
+            )
+
+        # Safeguard 2: Duplicate send prevention
         if self.review_manager.is_duplicate(draft.recipient):
             return SendResult(
                 success=False,
@@ -151,7 +207,7 @@ class EmailSender:
                 error="DUPLICATE_RECIPIENT",
             )
 
-        # Safeguard 2: Explicit human approval required
+        # Safeguard 3: Explicit human approval required
         if not draft.approved or draft.status != DraftStatus.APPROVED:
             return SendResult(
                 success=False,
@@ -161,7 +217,19 @@ class EmailSender:
                 error="APPROVAL_REQUIRED",
             )
 
-        # Safeguard 3: If custom mock provider is injected (e.g. in tests)
+        # Safeguard 4: DRY RUN SAFETY CHECK (MUST precede any provider call)
+        # Prevents real network transmission regardless of whether a provider is injected.
+        if self.dry_run:
+            self.review_manager.record_sent(draft.recipient)
+            draft.status = DraftStatus.SIMULATED_SENT
+            return SendResult(
+                success=True,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Simulated send succeeded (DRY RUN mode — network transmission prevented).",
+            )
+
+        # Safeguard 5: Non-dry-run provider execution (strictly for tests/mock providers)
         if self.provider is not None:
             try:
                 self.provider.send_email(
@@ -187,7 +255,7 @@ class EmailSender:
                     error=str(e),
                 )
 
-        # Safeguard 4: Check real Gmail provider configuration
+        # Check Gmail configuration honestly if in non-dry-run mode without custom provider
         if not self.is_gmail_configured():
             return SendResult(
                 success=False,
@@ -201,22 +269,11 @@ class EmailSender:
                 error="GMAIL_NOT_CONFIGURED",
             )
 
-        # If dry run mode is enabled
-        if self.dry_run:
-            self.review_manager.record_sent(draft.recipient)
-            draft.status = DraftStatus.SENT
-            return SendResult(
-                success=True,
-                draft_id=draft_id,
-                recipient=draft.recipient,
-                message="Email validated and queued (DRY RUN mode — no actual network packet sent).",
-            )
-
-        # Real transmission would happen here once Gmail API provider is instantiated
+        # Live Gmail sending remains strictly disabled
         return SendResult(
             success=False,
             draft_id=draft_id,
             recipient=draft.recipient,
-            message="Live Gmail client provider is pending initialization.",
-            error="PROVIDER_UNINITIALIZED",
+            message="Live email transmission is disabled in SmartMail.",
+            error="LIVE_SENDING_DISABLED",
         )

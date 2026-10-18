@@ -276,6 +276,7 @@ def test_draft_send_in_dry_run_mode(client: FlaskClient, test_send_log: SendLog)
 def test_unconfigured_gmail_reports_honest_error(client: FlaskClient, test_send_log: SendLog):
     """When Gmail is not configured and no mock provider is injected, UI honestly reports GMAIL_NOT_CONFIGURED."""
     client.application.config["EMAIL_SENDER_PROVIDER"] = None
+    client.application.config["DRY_RUN"] = False
 
     draft = EmailDraft(
         draft_id="draft-gmail-unconf",
@@ -550,4 +551,49 @@ def test_draft_evidence_rendering_escaping_and_wrapping(client: FlaskClient):
     # Long safe URL must be present and have wrapping styles
     assert 'word-break: break-all' in html
     assert "https://example.com/very/long/path/" in html
+
+
+def test_secret_key_production_enforcement(monkeypatch):
+    """Production mode must raise RuntimeError if insecure or missing secret key."""
+    from src.ui.app import create_app
+    monkeypatch.setenv("FLASK_ENV", "production")
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY must be set"):
+        create_app()
+
+
+def test_file_token_regex_security(client: FlaskClient):
+    """Malicious or path-traversing file tokens are rejected with HTTP 400."""
+    res1 = client.post("/contacts/preview", json={"file_token": "../../etc/passwd"})
+    assert res1.status_code == 400
+    assert "Invalid file token format" in res1.get_json()["error"]
+
+    res2 = client.post("/contacts/download-report", json={"file_token": "../token"})
+    assert res2.status_code == 400
+
+
+def test_cv_download_security_restrictions(client: FlaskClient):
+    """Only PDF files in approved directories can be downloaded."""
+    # Attempting to download non-pdf file
+    res = client.get("/download/cv/.session.json", follow_redirects=True)
+    html = res.data.decode("utf-8")
+    assert "Access denied: only PDF files may be downloaded" in html
+
+
+def test_atomic_write_storage_helper(tmp_path: Path):
+    """_atomic_write_json ensures atomic, uncorrupted writes to disk."""
+    from src.ui.storage import _atomic_write_json
+    target = tmp_path / "test.json"
+    data = {"key": "initial_value", "items": [1, 2, 3]}
+
+    _atomic_write_json(target, data)
+    assert target.exists()
+    assert json.loads(target.read_text(encoding="utf-8")) == data
+
+    # Update atomically
+    data["key"] = "updated_value"
+    _atomic_write_json(target, data)
+    assert json.loads(target.read_text(encoding="utf-8")) == data
 

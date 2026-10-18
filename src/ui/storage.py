@@ -26,6 +26,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _atomic_write_json(file_path: Path, data: Any) -> None:
+    """Atomically write JSON data to file_path via a temporary file and atomic replace."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4().hex[:8]}")
+    try:
+        temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(temp_file, file_path)
+    finally:
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Session & CV Configuration
 # ---------------------------------------------------------------------------
@@ -41,9 +56,8 @@ def get_session() -> dict[str, Any]:
 
 
 def save_session(data: dict[str, Any]) -> None:
-    """Save session state to disk."""
-    _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SESSION_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    """Save session state to disk atomically."""
+    _atomic_write_json(_SESSION_FILE, data)
 
 
 def get_registered_cv_metadata() -> dict[str, Any]:
@@ -198,7 +212,7 @@ def save_draft_record(
         "matched_projects": getattr(draft, "matched_projects", []),
         "recipient_type": getattr(draft, "recipient_type", "individual"),
     }
-    file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _atomic_write_json(file_path, data)
     return file_path
 
 
@@ -355,7 +369,7 @@ def update_draft(
     draft_data["updated_at"] = _now_iso()
 
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
-    file_path.write_text(json.dumps(draft_data, indent=2), encoding="utf-8")
+    _atomic_write_json(file_path, draft_data)
     return draft_data
 
 
@@ -370,7 +384,7 @@ def approve_draft(draft_id: str, send_log: SendLog | None = None) -> dict[str, A
     draft_data["updated_at"] = _now_iso()
 
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
-    file_path.write_text(json.dumps(draft_data, indent=2), encoding="utf-8")
+    _atomic_write_json(file_path, draft_data)
 
     # Record approval in persistent SQLite send log
     sl = send_log or SendLog()
@@ -394,7 +408,7 @@ def reject_draft(draft_id: str, reason: str = "") -> dict[str, Any]:
     draft_data["updated_at"] = _now_iso()
 
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
-    file_path.write_text(json.dumps(draft_data, indent=2), encoding="utf-8")
+    _atomic_write_json(file_path, draft_data)
     return draft_data
 
 
@@ -408,7 +422,7 @@ def save_batch_record(batch_id: str, record: dict[str, Any]) -> None:
     fp = _BATCHES_DIR / f"{batch_id}.json"
     record["batch_id"] = batch_id
     record["saved_at"] = _now_iso()
-    fp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    _atomic_write_json(fp, record)
 
 
 def get_batch_record(batch_id: str) -> dict[str, Any] | None:

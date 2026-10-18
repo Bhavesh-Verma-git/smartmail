@@ -95,13 +95,13 @@ class TestActualRecruitmentCSV:
 
         # In 1-indexed CSV line numbering (where line 1 is header):
         # Line 1: header ("email")
-        # Line 2: first contact ("cv@arabianfal.com")
-        # Line 60: 59th contact ("hiringnow.ksa@gmail.com")
+        # Line 2: first contact ("cv@arabianfal.example")
+        # Line 60: 59th contact ("hiringnow.ksa@example.com")
         assert first_contact.row_number == 2
-        assert first_contact.email_result.normalized_email == "cv@arabianfal.com"
+        assert first_contact.email_result.normalized_email == "cv@arabianfal.example"
 
         assert last_contact.row_number == 60
-        assert last_contact.email_result.normalized_email == "hiringnow.ksa@gmail.com"
+        assert last_contact.email_result.normalized_email == "hiringnow.ksa@example.com"
 
     def test_email_only_contact_safely_blocked_without_fabrication(self, tmp_path: Path):
         dummy_cv = tmp_path / "cv.pdf"
@@ -137,7 +137,7 @@ class TestActualRecruitmentCSV:
             company_name="Arabian Fal",
             contact_name="",
             email_result=c1.email_result,
-            website="https://arabianfal.com",
+            website="https://arabianfal.example",
             role_or_job_url="AI/ML Intern",
             source_url="",
             notes="",
@@ -147,14 +147,13 @@ class TestActualRecruitmentCSV:
         db_path = tmp_path / "test_send.db"
         send_log = SendLog(db_path=db_path)
 
-        # Research mock: arabianfal.com is reachable but its page text does NOT
+        # Research mock: arabianfal.example is reachable but its page text does NOT
         # contain the company name "Arabian Fal".  This deterministically yields
         # identity=REVIEW + domain=SUPPORTED → overall REVIEW, which is what
-        # the approval lifecycle test requires.  Using a real HTTP request
-        # would make this test fragile and network-dependent.
+        # the approval lifecycle test requires.
         research_mock = MockResearchProvider({
-            "https://arabianfal.com": EvidenceItem(
-                source_url="https://arabianfal.com",
+            "https://arabianfal.example": EvidenceItem(
+                source_url="https://arabianfal.example",
                 source_type="official_website",
                 title="Welcome",
                 extracted_text="We provide professional services and solutions.",
@@ -162,8 +161,8 @@ class TestActualRecruitmentCSV:
                 retrieval_status=RETRIEVAL_OK,
                 retrieval_note="HTTP 200 (mocked)",
             ),
-            "https://www.arabianfal.com": EvidenceItem(
-                source_url="https://www.arabianfal.com",
+            "https://www.arabianfal.example": EvidenceItem(
+                source_url="https://www.arabianfal.example",
                 source_type="official_website",
                 title="Welcome",
                 extracted_text="We provide professional services and solutions.",
@@ -178,7 +177,7 @@ class TestActualRecruitmentCSV:
             email_sender_provider=mock_send_provider,
             send_log=send_log,
             campaign_id="recruitment_test",
-            dry_run=True,
+            dry_run=False,
         )
 
         wf_res = workflow.process_contact(
@@ -210,7 +209,7 @@ class TestActualRecruitmentCSV:
         send_approved = workflow.send_draft(draft.draft_id)
         assert send_approved.success is True
         assert len(mock_send_provider.sent) == 1
-        assert mock_send_provider.sent[0]["recipient"] == "cv@arabianfal.com"
+        assert mock_send_provider.sent[0]["recipient"] == "cv@arabianfal.example"
 
         # 4. Duplicate send attempt is blocked
         send_duplicate = workflow.send_draft(draft.draft_id)

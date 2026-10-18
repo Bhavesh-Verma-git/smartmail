@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_draft_id  ON send_log (draft_id);
 STATUS_DRAFT = "DRAFT"
 STATUS_APPROVED = "APPROVED"
 STATUS_SUCCESS = "SUCCESS"
+STATUS_SIMULATED = "SIMULATED"
 STATUS_FAILED = "FAILED"
 STATUS_UNCERTAIN = "UNCERTAIN"
 
@@ -128,6 +129,10 @@ class SendLog:
         """Record a confirmed successful send."""
         self._upsert(draft_id, recipient, campaign_id, STATUS_SUCCESS)
 
+    def record_simulated(self, draft_id: str, recipient: str, campaign_id: str = "") -> None:
+        """Record a simulated send (dry run — no actual transmission)."""
+        self._upsert(draft_id, recipient, campaign_id, STATUS_SIMULATED)
+
     def record_failed(self, draft_id: str, recipient: str, campaign_id: str = "") -> None:
         """Record a definitively failed send (provider rejected it)."""
         self._upsert(draft_id, recipient, campaign_id, STATUS_FAILED)
@@ -155,10 +160,16 @@ class SendLog:
                     "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
                 ).fetchone()
                 if row:
-                    conn.execute(
-                        "UPDATE send_log SET status=?, updated_at=? WHERE draft_id=?",
-                        (status, now, draft_id),
-                    )
+                    if campaign_id:
+                        conn.execute(
+                            "UPDATE send_log SET status=?, updated_at=?, campaign_id=? WHERE draft_id=?",
+                            (status, now, campaign_id, draft_id),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE send_log SET status=?, updated_at=? WHERE draft_id=?",
+                            (status, now, draft_id),
+                        )
                 else:
                     conn.execute(
                         """
@@ -187,6 +198,37 @@ class SendLog:
                 LIMIT 1
                 """,
                 (recipient_norm, campaign_id, STATUS_SUCCESS),
+            ).fetchone()
+        return row is not None
+
+    def was_simulated(self, recipient: str, campaign_id: str = "") -> bool:
+        """
+        Return True if a simulated send to this recipient (and optional campaign)
+        has been recorded.
+        """
+        recipient_norm = recipient.strip().lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM send_log
+                WHERE recipient = ? AND campaign_id = ? AND status = ?
+                LIMIT 1
+                """,
+                (recipient_norm, campaign_id, STATUS_SIMULATED),
+            ).fetchone()
+        return row is not None
+
+    def has_any_send(self, recipient: str, campaign_id: str = "") -> bool:
+        """Return True if either a successful live send or a simulated send was recorded."""
+        recipient_norm = recipient.strip().lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM send_log
+                WHERE recipient = ? AND campaign_id = ? AND status IN (?, ?)
+                LIMIT 1
+                """,
+                (recipient_norm, campaign_id, STATUS_SUCCESS, STATUS_SIMULATED),
             ).fetchone()
         return row is not None
 

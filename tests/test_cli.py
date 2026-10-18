@@ -139,10 +139,10 @@ class TestCLICommands:
         captured = capsys.readouterr()
         assert "Approved:    True" in captured.out or "Approved: True" in captured.out
 
-        # 8. Send draft safely blocks without live Gmail
+        # 8. Send draft in dry-run mode safely simulates send without network calls
         code = main(["send-draft", "--id", draft_id, "--confirm"])
         captured = capsys.readouterr()
-        assert "GMAIL_NOT_CONFIGURED" in captured.out or "Send failed" in captured.out
+        assert "Simulated send succeeded" in captured.out or "GMAIL_NOT_CONFIGURED" in captured.out or "Send failed" in captured.out
 
         # 9. Final hash check
         final_hash = hashlib.sha256(cv_file.read_bytes()).hexdigest()

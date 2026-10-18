@@ -93,7 +93,9 @@
               {% if d.status == 'APPROVED' %}
                 <span class="badge badge-success"><span class="badge-dot"></span>Approved</span>
               {% elif d.status == 'SENT' %}
-                <span class="badge badge-info"><span class="badge-dot"></span>Sent</span>
+                <span class="badge badge-info"><span class="badge-dot"></span>Live Sent</span>
+              {% elif d.status == 'SIMULATED_SENT' %}
+                <span class="badge badge-info"><span class="badge-dot"></span>Simulated</span>
               {% elif d.status == 'REJECTED' %}
                 <span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>
               {% elif d.review_required %}

@@ -44,12 +44,14 @@ from src.verification.models import (
 # Primary Classification Outcomes
 # ---------------------------------------------------------------------------
 CLASSIFICATION_CONFIDENT = "CONFIDENT"
+CLASSIFICATION_REVIEW = "REVIEW"
 CLASSIFICATION_REVIEW_NAME = "REVIEW_NAME"
 CLASSIFICATION_NOT_AI_RELEVANT = "NOT_AI_RELEVANT"
 CLASSIFICATION_ELIMINATED = "ELIMINATED"
 
 # Convenient aliases
 CONFIDENT = CLASSIFICATION_CONFIDENT
+REVIEW = CLASSIFICATION_REVIEW
 REVIEW_NAME = CLASSIFICATION_REVIEW_NAME
 NOT_AI_RELEVANT = CLASSIFICATION_NOT_AI_RELEVANT
 ELIMINATED = CLASSIFICATION_ELIMINATED
@@ -221,7 +223,7 @@ def classify_contact(
     if retrieval_failures and not ok_external_pages and research_result.company_identity_status in (UNKNOWN, RES_REVIEW):
         fail_reasons = "; ".join(e.retrieval_note or e.claim_supported for e in retrieval_failures if e.retrieval_note or e.claim_supported)
         return ContactClassification(
-            primary_outcome=CLASSIFICATION_REVIEW_NAME,
+            primary_outcome=CLASSIFICATION_REVIEW,
             reason_code=REASON_RESEARCH_FAILED,
             explanation=f"Automated web research encountered technical errors ({fail_reasons or 'unreachable'}). Manual review required.",
             ai_ml_relevance="REVIEW",
@@ -276,7 +278,7 @@ def classify_contact(
     # If relevance is ambiguous or unverified
     if match_result.relevance_status == "REVIEW" and not matched_areas:
         return ContactClassification(
-            primary_outcome=CLASSIFICATION_REVIEW_NAME,
+            primary_outcome=CLASSIFICATION_REVIEW,
             reason_code=REASON_AI_RELEVANCE_UNCERTAIN,
             explanation="External evidence does not clearly confirm whether company engages in AI/ML work. Human review needed.",
             ai_ml_relevance="REVIEW",

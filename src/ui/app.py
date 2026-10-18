@@ -10,6 +10,8 @@ import csv
 import io
 import json
 import os
+import re
+import secrets
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -66,6 +68,7 @@ from src.ui.storage import (
     save_session,
     store_and_register_cv,
     update_draft,
+    _atomic_write_json,
 )
 from src.workflow.engine import OutreachWorkflow
 
@@ -80,9 +83,28 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         template_folder=str(template_dir),
         static_folder=str(static_dir),
     )
-    app.config["SECRET_KEY"] = "smartmail-local-testing-secret-key-2026"
+    # Environment-based secret key loading with production validation
+    env_secret = os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY")
+    flask_env = os.getenv("FLASK_ENV", "development").lower()
+    is_production = flask_env in ("production", "prod")
+
+    if is_production:
+        if not env_secret or env_secret in ("smartmail-local-testing-secret-key-2026", "dev", "secret", "change-me"):
+            raise RuntimeError(
+                "Insecure configuration: FLASK_SECRET_KEY must be set to a strong, unique secret in production environments."
+            )
+        secret_key = env_secret
+    else:
+        # Development / test mode: load from env or generate a secure random secret for the process
+        secret_key = env_secret if env_secret else secrets.token_hex(32)
+
+    app.config["SECRET_KEY"] = secret_key
     app.config["SEND_LOG_PATH"] = "data/send_log.db"
     app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    if is_production:
+        app.config["SESSION_COOKIE_SECURE"] = True
 
     if test_config:
         app.config.update(test_config)
@@ -235,6 +257,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def preview_contacts_mapping() -> Response:
         data = request.get_json(silent=True) or request.form.to_dict()
         file_token = data.get("file_token", "").strip()
+        if not file_token or not re.match(r"^[a-zA-Z0-9_-]{1,64}$", file_token):
+            return jsonify({"success": False, "error": "Invalid file token format."}), 400
         sheet_name = data.get("sheet_name")
         mapping_raw = data.get("mapping")
 
@@ -248,8 +272,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         else:
             mapping = None
 
-        batches_dir = Path("output/batches_input")
-        matching = list(batches_dir.glob(f"{file_token}_*"))
+        batches_dir = Path("output/batches_input").resolve()
+        matching = [p for p in batches_dir.glob(f"{file_token}_*") if p.resolve().is_relative_to(batches_dir)]
         if not matching:
             return jsonify({"success": False, "error": f"Spreadsheet token '{file_token}' expired or not found."}), 404
 
@@ -306,6 +330,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def download_validation_report() -> Response:
         data = request.get_json(silent=True) or request.form.to_dict()
         file_token = data.get("file_token", "").strip()
+        if not file_token or not re.match(r"^[a-zA-Z0-9_-]{1,64}$", file_token):
+            return Response("Invalid file token format", status=400)
         sheet_name = data.get("sheet_name")
         mapping_raw = data.get("mapping")
 
@@ -319,8 +345,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         else:
             mapping = None
 
-        batches_dir = Path("output/batches_input")
-        matching = list(batches_dir.glob(f"{file_token}_*"))
+        batches_dir = Path("output/batches_input").resolve()
+        matching = [p for p in batches_dir.glob(f"{file_token}_*") if p.resolve().is_relative_to(batches_dir)]
         if not matching:
             return Response("Spreadsheet file not found", status=404)
 
@@ -378,9 +404,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             batch_id = f"batch_{uuid.uuid4().hex[:10]}"
 
             if file_token:
+                if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", file_token):
+                    flash("Invalid spreadsheet token format.", "danger")
+                    return redirect(url_for("import_contacts_page"))
                 # Stage 2: Process from spreadsheet token with custom mapping
-                batches_dir = Path("output/batches_input")
-                matching = list(batches_dir.glob(f"{file_token}_*"))
+                batches_dir = Path("output/batches_input").resolve()
+                matching = [p for p in batches_dir.glob(f"{file_token}_*") if p.resolve().is_relative_to(batches_dir)]
                 if not matching:
                     flash(f"Spreadsheet session expired. Please re-upload your contact file.", "warning")
                     return redirect(url_for("import_contacts_page"))
@@ -679,12 +708,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         send_log = _get_send_log()
         mode = WorkflowMode(draft.get("mode", "uploaded_cv"))
 
-        # Initialize workflow with dry_run=True (Safety default)
+        # Initialize workflow with dry_run=True (Safety default unless explicitly configured)
+        is_dry_run = app.config.get("DRY_RUN", True)
         workflow = OutreachWorkflow(
             default_mode=mode,
             uploaded_cv_path=draft.get("attachment_path") if mode == WorkflowMode.UPLOADED_CV else None,
             email_sender_provider=app.config.get("EMAIL_SENDER_PROVIDER"),
-            dry_run=True,
+            dry_run=is_dry_run,
             send_log=send_log,
             campaign_id=draft.get("campaign_id", ""),
         )
@@ -709,11 +739,11 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         send_res: SendResult = workflow.send_draft(draft_id)
 
         if send_res.success:
-            # Update local disk status to SENT
-            draft["status"] = "SENT"
+            # Update local disk status to SIMULATED_SENT
+            draft["status"] = DraftStatus.SIMULATED_SENT.value
             draft_file = Path("output/.drafts") / f"{draft_id}.json"
             if draft_file.exists():
-                draft_file.write_text(json.dumps(draft, indent=2), encoding="utf-8")
+                _atomic_write_json(draft_file, draft)
             flash(f"Send outcome: {send_res.message}", "success")
         else:
             flash(f"Send blocked ({send_res.error}): {send_res.message}", "warning")
@@ -859,16 +889,19 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     @app.route("/download/cv/<filename>")
     def download_cv_file(filename: str) -> Any:
         safe_name = Path(filename).name
-        # Look in output/, output/tailored_cvs/, templates/
+        if not safe_name.lower().endswith(".pdf"):
+            flash("Access denied: only PDF files may be downloaded.", "danger")
+            return redirect(url_for("cv_settings"))
+        # Look strictly in output/uploaded_cvs, output/tailored_cvs, templates
         candidate_dirs = [
-            Path("output"),
-            Path("output/tailored_cvs"),
-            Path("templates"),
+            Path("output/uploaded_cvs").resolve(),
+            Path("output/tailored_cvs").resolve(),
+            Path("templates").resolve(),
         ]
         for cdir in candidate_dirs:
-            target = cdir / safe_name
-            if target.exists() and target.is_file():
-                return send_file(str(target.resolve()), as_attachment=False)
+            target = (cdir / safe_name).resolve()
+            if target.is_relative_to(cdir) and target.exists() and target.is_file():
+                return send_file(str(target), as_attachment=False)
 
         flash(f"CV file '{safe_name}' not found on server.", "warning")
         return redirect(url_for("cv_settings"))

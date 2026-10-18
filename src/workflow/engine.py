@@ -442,8 +442,16 @@ class OutreachWorkflow:
         """Attempt to send an approved draft through safeguards."""
         draft = self.review_manager.get_draft(draft_id)
 
-        # Persistent duplicate check across restarts
+        # Persistent duplicate check across restarts (both live sends and simulated sends in dry run)
         if self.send_log.was_successfully_sent(draft.recipient, self.campaign_id):
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
+                error="DUPLICATE_RECIPIENT",
+            )
+        if self.sender.dry_run and self.send_log.was_simulated(draft.recipient, self.campaign_id):
             return SendResult(
                 success=False,
                 draft_id=draft_id,
@@ -464,12 +472,19 @@ class OutreachWorkflow:
 
         result = self.sender.send(draft_id)
         if result.success:
-            self.send_log.record_success(
-                draft_id=draft_id,
-                recipient=draft.recipient,
-                campaign_id=self.campaign_id,
-            )
-        elif result.error not in ("APPROVAL_REQUIRED", "DUPLICATE_RECIPIENT", "GMAIL_NOT_CONFIGURED", "UNCERTAIN_SEND"):
+            if self.sender.dry_run:
+                self.send_log.record_simulated(
+                    draft_id=draft_id,
+                    recipient=draft.recipient,
+                    campaign_id=self.campaign_id,
+                )
+            else:
+                self.send_log.record_success(
+                    draft_id=draft_id,
+                    recipient=draft.recipient,
+                    campaign_id=self.campaign_id,
+                )
+        elif result.error not in ("APPROVAL_REQUIRED", "DUPLICATE_RECIPIENT", "LIVE_SENDING_DISABLED", "GMAIL_NOT_CONFIGURED", "UNCERTAIN_SEND", "INVALID_RECIPIENT", "EMPTY_SUBJECT", "EMPTY_BODY", "ATTACHMENT_NOT_FOUND"):
             self.send_log.record_failed(
                 draft_id=draft_id,
                 recipient=draft.recipient,
@@ -550,7 +565,7 @@ class OutreachWorkflow:
             recipient = contact.email_result.normalized_email
 
             # Check if this recipient was already sent an email in this campaign
-            if self.send_log.was_successfully_sent(recipient, self.campaign_id):
+            if self.send_log.was_successfully_sent(recipient, self.campaign_id) or (self.sender.dry_run and self.send_log.was_simulated(recipient, self.campaign_id)):
                 blocked_res = WorkflowResult(
                     mode=self._mode,
                     contact_email=recipient,

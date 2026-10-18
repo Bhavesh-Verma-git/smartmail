@@ -33,9 +33,11 @@ htmlcov/
 .coverage
 coverage.xml
 
-# IDE
+# IDE & Scratch
 .vscode/
 .idea/
+*tempCodeRunnerFile*
+tests/scratch_*.py
 
 # OS
 Thumbs.db

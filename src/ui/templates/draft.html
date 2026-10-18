@@ -29,7 +29,9 @@
     {% if draft.status == 'APPROVED' %}
       <span class="badge badge-success" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Approved for sending</span>
     {% elif draft.status == 'SENT' %}
-      <span class="badge badge-info" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Sent (Dry Run)</span>
+      <span class="badge badge-info" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Live Sent</span>
+    {% elif draft.status == 'SIMULATED_SENT' %}
+      <span class="badge badge-info" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Simulated (Dry Run)</span>
     {% elif draft.status == 'REJECTED' %}
       <span class="badge badge-danger" style="font-size:12px; padding: 0.35rem 0.75rem;"><span class="badge-dot"></span>Rejected / On Hold</span>
     {% endif %}

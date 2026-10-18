@@ -21,6 +21,7 @@ class DraftStatus(str, Enum):
     DRAFT = "DRAFT"
     APPROVED = "APPROVED"
     SENT = "SENT"
+    SIMULATED_SENT = "SIMULATED_SENT"
     REJECTED = "REJECTED"
 
 

@@ -177,7 +177,7 @@ class TestSendingSafeguards:
         manager = EmailReviewManager()
         manager.register_draft(draft)
         provider = MockSendingProvider()
-        sender = EmailSender(review_manager=manager, provider=provider)
+        sender = EmailSender(review_manager=manager, provider=provider, dry_run=False)
 
         # Grant explicit approval
         manager.approve_draft(draft.draft_id)
@@ -208,7 +208,7 @@ class TestSendingSafeguards:
         manager.register_draft(draft1)
         manager.register_draft(draft2)
         provider = MockSendingProvider()
-        sender = EmailSender(review_manager=manager, provider=provider)
+        sender = EmailSender(review_manager=manager, provider=provider, dry_run=False)
 
         # Approve and send draft 1
         manager.approve_draft(draft1.draft_id)
@@ -234,7 +234,7 @@ class TestSendingSafeguards:
         manager = EmailReviewManager()
         manager.register_draft(draft)
         provider = MockSendingProvider()
-        sender = EmailSender(review_manager=manager, provider=provider)
+        sender = EmailSender(review_manager=manager, provider=provider, dry_run=False)
 
         # 1. Unapproved send fails
         res1 = sender.send(draft.draft_id)
@@ -283,13 +283,34 @@ class TestSendingSafeguards:
         manager.approve_draft(draft.draft_id)
 
         # No custom provider injected -> relies on system Gmail configuration
-        sender = EmailSender(review_manager=manager, provider=None)
+        sender = EmailSender(review_manager=manager, provider=None, dry_run=False)
         result = sender.send(draft.draft_id)
 
         assert result.success is False
         assert result.error == "GMAIL_NOT_CONFIGURED"
         assert "Gmail integration is not configured" in result.message
         assert "GMAIL_CREDENTIALS_PATH" in result.message
+
+    def test_dry_run_prevents_network_transmission_even_with_provider_injected(self, profile):
+        """CRITICAL SAFEGUARD: dry_run=True must NEVER invoke network provider transmission."""
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="safeguard@target.example",
+            company_name="Safe Corp",
+            attachment_path="cv.pdf",
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+
+        mock_provider = MockSendingProvider()
+        sender = EmailSender(review_manager=manager, provider=mock_provider, dry_run=True)
+
+        result = sender.send(draft.draft_id)
+        assert result.success is True
+        assert "Simulated send succeeded" in result.message
+        assert draft.status == DraftStatus.SIMULATED_SENT
+        assert len(mock_provider.sent_emails) == 0, "Provider must NEVER be invoked during dry run!"
 
     def test_persistent_duplicate_protection_across_restarts(
         self, sample_contact, tmp_path
