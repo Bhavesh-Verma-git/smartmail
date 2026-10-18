@@ -468,6 +468,11 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.content : "{{ csrf_token }}";
+  }
+
   // -------------------------------------------------------------------------
   // STEP 1: CV Upload
   // -------------------------------------------------------------------------
@@ -510,7 +515,13 @@
     });
 
     btnClearCv?.addEventListener("click", () => {
-      fetch("/cv/clear", { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" } })
+      fetch("/cv/clear", {
+        method: "POST",
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "X-CSRFToken": getCsrfToken()
+        }
+      })
         .then(() => {
           wizardState.cvRegistered = false;
           document.getElementById("registeredCvContainer").style.display = "none";
@@ -535,11 +546,15 @@
 
       const formData = new FormData();
       formData.append("cv_file", file);
+      formData.append("csrf_token", getCsrfToken());
 
       fetch("/cv/upload", {
         method: "POST",
         body: formData,
-        headers: { "X-Requested-With": "XMLHttpRequest" }
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "X-CSRFToken": getCsrfToken()
+        }
       })
       .then((res) => res.json())
       .then((data) => {
@@ -633,11 +648,15 @@
 
       const formData = new FormData();
       formData.append("contacts_file", file);
+      formData.append("csrf_token", getCsrfToken());
 
       fetch("/contacts/inspect", {
         method: "POST",
         body: formData,
-        headers: { "X-Requested-With": "XMLHttpRequest" }
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "X-CSRFToken": getCsrfToken()
+        }
       })
       .then((res) => res.json())
       .then((data) => {
@@ -800,8 +819,12 @@
   function loadValidationPreview() {
     fetch("/contacts/preview", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCsrfToken()
+      },
       body: JSON.stringify({
+        csrf_token: getCsrfToken(),
         file_token: wizardState.fileToken,
         sheet_name: wizardState.selectedSheet,
         mapping: wizardState.activeMapping

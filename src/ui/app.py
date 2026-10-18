@@ -750,7 +750,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def reject_draft_route(draft_id: str) -> Any:
         reason = request.form.get("reason", "Marked rejected by reviewer.")
         try:
-            reject_draft(draft_id=draft_id, reason=reason)
+            reject_draft(draft_id=draft_id, reason=reason, send_log=_get_send_log())
             flash(f"Draft {draft_id} rejected and placed on hold.", "warning")
         except Exception as exc:
             app.logger.warning("Error rejecting draft: %s", exc)
@@ -988,6 +988,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             target = (cdir / safe_name).resolve()
             if target.is_relative_to(cdir) and target.exists() and target.is_file():
                 return send_file(str(target), as_attachment=False)
+
+        # Fallback check against registered CV path if safe_name matches filename or stored_filename
+        cv_meta = get_registered_cv_metadata()
+        if cv_meta.get("exists") and cv_meta.get("path"):
+            reg_path = Path(cv_meta["path"]).resolve()
+            if (safe_name == cv_meta.get("filename") or safe_name == cv_meta.get("stored_filename")) and reg_path.exists():
+                return send_file(str(reg_path), as_attachment=False)
 
         flash(f"CV file '{safe_name}' not found on server.", "warning")
         return redirect(url_for("cv_settings"))

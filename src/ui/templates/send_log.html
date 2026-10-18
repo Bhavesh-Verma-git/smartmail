@@ -87,6 +87,8 @@
                   <span class="badge badge-warning"><span class="badge-dot"></span>UNCERTAIN</span>
                 {% elif e.status == 'FAILED' %}
                   <span class="badge badge-danger"><span class="badge-dot"></span>FAILED</span>
+                {% elif e.status == 'REJECTED' %}
+                  <span class="badge badge-danger"><span class="badge-dot"></span>REJECTED / HOLD</span>
                 {% else %}
                   <span class="badge badge-neutral"><span class="badge-dot"></span>{{ e.status }}</span>
                 {% endif %}
@@ -116,6 +118,8 @@
                   <span style="color:#fbbf24; font-weight:500;">Reconciliation Required</span>
                 {% elif e.status == 'APPROVED' %}
                   <span style="color:#4ade80;">Ready for Send Attempt</span>
+                {% elif e.status == 'REJECTED' %}
+                  <span style="color:#f87171;">Rejected / On Hold</span>
                 {% else %}
                   <span style="color:var(--text-dim);">Audit Log Only</span>
                 {% endif %}

@@ -352,3 +352,15 @@ class TestDispatchReservationAndConcurrency:
         assert claimed_retry is True
         assert reason_retry == "CLAIMED"
 
+    def test_record_rejected_updates_status(self, tmp_path):
+        """
+        Prove that rejecting a draft records REJECTED status in SQLite send log.
+        """
+        db_file = tmp_path / "reject_test.db"
+        log = SendLog(db_path=str(db_file))
+        log.record_approved("draft-rej-1", "rejectee@corp.com", "camp-rej")
+        assert log.get_status("draft-rej-1") == STATUS_APPROVED
+
+        log.record_rejected("draft-rej-1", "rejectee@corp.com", "camp-rej")
+        assert log.get_status("draft-rej-1") == "REJECTED"
+

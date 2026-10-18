@@ -901,5 +901,52 @@ def test_dispatch_state_consistency_across_outcomes(tmp_path: Path, test_send_lo
         assert test_send_log.get_status(d_unc_id) == "UNCERTAIN"
         assert test_send_log.has_uncertain_send("unc-target@example.com", "sync-camp")
 
+        # I. Reject / hold draft -> updates both draft JSON and SQLite send-log to REJECTED
+        d_rej_id = "draft-rej-test"
+        d_rej = EmailDraft(
+            draft_id=d_rej_id,
+            recipient="rej-target@example.com",
+            recipient_name="Rej Target",
+            company_name="RejCorp",
+            subject="Rej Test",
+            body="Rej Body",
+            attachment_path=str(valid_pdf),
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+        )
+        save_draft_record(d_rej, campaign_id="sync-camp")
+        test_send_log.record_approved(d_rej_id, "rej-target@example.com", "sync-camp")
+        c.post(f"/drafts/{d_rej_id}/reject", data={"reason": "Reviewer declined"}, follow_redirects=True)
+        assert get_draft(d_rej_id)["status"] == "REJECTED"
+        assert get_draft(d_rej_id)["approved"] is False
+        assert test_send_log.get_status(d_rej_id) == "REJECTED"
+
+
+def test_download_cv_resolves_registered_cv(client, tmp_path, monkeypatch):
+    """Prove that download_cv_file works for both registered original and stored filenames."""
+    from pypdf import PdfWriter
+    cv_dir = tmp_path / "uploaded_cvs"
+    cv_dir.mkdir(parents=True)
+    pdf_file = cv_dir / "cv_abc123_my_resume.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with open(pdf_file, "wb") as f:
+        writer.write(f)
+
+    session = {
+        "uploaded_cv_path": str(pdf_file),
+        "original_cv_filename": "my_resume.pdf",
+    }
+    monkeypatch.setattr("src.ui.storage.get_session", lambda: session)
+
+    res_orig = client.get("/download/cv/my_resume.pdf")
+    assert res_orig.status_code == 200
+    assert res_orig.mimetype == "application/pdf"
+
+    res_stored = client.get("/download/cv/cv_abc123_my_resume.pdf")
+    assert res_stored.status_code == 200
+    assert res_stored.mimetype == "application/pdf"
+
 
 

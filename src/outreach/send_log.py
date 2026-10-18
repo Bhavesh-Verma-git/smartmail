@@ -55,6 +55,7 @@ STATUS_SUCCESS = "SUCCESS"
 STATUS_SIMULATED = "SIMULATED"
 STATUS_FAILED = "FAILED"
 STATUS_UNCERTAIN = "UNCERTAIN"
+STATUS_REJECTED = "REJECTED"
 
 
 def _now_iso() -> str:
@@ -188,6 +189,13 @@ class SendLog:
         Must NOT be treated as SUCCESS until reconciled manually.
         """
         self._upsert(draft_id, recipient, campaign_id, STATUS_UNCERTAIN)
+
+    def record_rejected(self, draft_id: str, recipient: str, campaign_id: str = "") -> None:
+        """
+        Record that a draft was rejected or placed on hold by the reviewer.
+        Clears previous approval in SQLite send log.
+        """
+        self._upsert(draft_id, recipient, campaign_id, STATUS_REJECTED)
 
     def claim_for_sending(
         self,

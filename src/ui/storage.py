@@ -14,7 +14,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.outreach.send_log import SendLog, STATUS_SUCCESS, STATUS_APPROVED, STATUS_DRAFT, STATUS_FAILED, STATUS_UNCERTAIN
+from src.outreach.send_log import (
+    SendLog,
+    STATUS_SUCCESS,
+    STATUS_APPROVED,
+    STATUS_DRAFT,
+    STATUS_FAILED,
+    STATUS_UNCERTAIN,
+    STATUS_REJECTED,
+)
 
 _DRAFTS_DIR = Path("output/.drafts")
 _BATCHES_DIR = Path("output/.batches")
@@ -421,8 +429,8 @@ def approve_draft(draft_id: str, send_log: SendLog | None = None) -> dict[str, A
     return draft_data
 
 
-def reject_draft(draft_id: str, reason: str = "") -> dict[str, Any]:
-    """Mark a draft as rejected/held."""
+def reject_draft(draft_id: str, reason: str = "", send_log: SendLog | None = None) -> dict[str, Any]:
+    """Mark a draft as rejected/held and synchronize with persistent SQLite send_log."""
     draft_data = get_draft(draft_id)
     if not draft_data:
         raise KeyError(f"Draft '{draft_id}' not found.")
@@ -434,6 +442,13 @@ def reject_draft(draft_id: str, reason: str = "") -> dict[str, Any]:
 
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
     _atomic_write_json(file_path, draft_data)
+
+    sl = send_log or SendLog()
+    sl.record_rejected(
+        draft_id=draft_id,
+        recipient=draft_data.get("recipient", ""),
+        campaign_id=draft_data.get("campaign_id", ""),
+    )
     return draft_data
 
 
