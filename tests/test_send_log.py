@@ -19,6 +19,7 @@ from src.outreach.send_log import (
     STATUS_SIMULATED,
     STATUS_FAILED,
     STATUS_UNCERTAIN,
+    STATUS_SENDING,
 )
 
 
@@ -165,3 +166,107 @@ class TestConcurrencyThreadSafety:
 
         assert not errors
         assert len(log.list_all()) == 40
+
+
+class TestDispatchReservationAndConcurrency:
+    def test_single_thread_claim_and_release_success(self, send_log: SendLog):
+        """Standard lifecycle: claim -> send succeeds -> record_success."""
+        claimed, reason = send_log.claim_for_sending("d-claim-1", "user@test.com", "camp-1", dry_run=False)
+        assert claimed is True
+        assert reason == "CLAIMED"
+        assert send_log.get_status("d-claim-1") == STATUS_SENDING
+
+        # Re-claiming while sending must be rejected
+        c2, r2 = send_log.claim_for_sending("d-claim-1", "user@test.com", "camp-1", dry_run=False)
+        assert c2 is False
+        assert r2 == "SEND_IN_PROGRESS"
+
+        # Record success
+        send_log.record_success("d-claim-1", "user@test.com", "camp-1")
+        assert send_log.get_status("d-claim-1") == STATUS_SUCCESS
+        assert send_log.was_successfully_sent("user@test.com", "camp-1")
+
+        # Claiming after success must be rejected as DUPLICATE_RECIPIENT
+        c3, r3 = send_log.claim_for_sending("d-claim-1", "user@test.com", "camp-1", dry_run=False)
+        assert c3 is False
+        assert r3 == "DUPLICATE_RECIPIENT"
+
+    def test_concurrent_claims_only_one_succeeds(self, send_log: SendLog):
+        """Two concurrent threads claiming the exact same recipient; only one succeeds."""
+        results: list[tuple[bool, str]] = []
+        barrier = threading.Barrier(2)
+
+        def attempt_claim(worker_id: int):
+            barrier.wait()
+            res = send_log.claim_for_sending(f"draft-{worker_id}", "contested@test.com", "camp-race", dry_run=False)
+            results.append(res)
+
+        t1 = threading.Thread(target=attempt_claim, args=(1,))
+        t2 = threading.Thread(target=attempt_claim, args=(2,))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        successes = [r for r in results if r[0] is True]
+        failures = [r for r in results if r[0] is False]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert successes[0][1] == "CLAIMED"
+        assert failures[0][1] in ("SEND_IN_PROGRESS", "ALREADY_SENT", "DUPLICATE_RECIPIENT")
+
+    def test_claim_release_on_failure_allows_reclaim(self, send_log: SendLog):
+        """If sending fails, release_claim(STATUS_FAILED) clears SENDING and allows retry."""
+        claimed, _ = send_log.claim_for_sending("d-fail", "fail@test.com", "camp-retry", dry_run=False)
+        assert claimed is True
+        assert send_log.get_status("d-fail") == STATUS_SENDING
+
+        # Provider fails
+        send_log.release_claim("d-fail", STATUS_FAILED)
+        assert send_log.get_status("d-fail") == STATUS_FAILED
+        assert not send_log.was_successfully_sent("fail@test.com", "camp-retry")
+
+        # Can now be claimed again for retry
+        reclaimed, r_reason = send_log.claim_for_sending("d-fail", "fail@test.com", "camp-retry", dry_run=False)
+        assert reclaimed is True
+        assert r_reason == "CLAIMED"
+
+    def test_claim_release_on_uncertain_blocks_further_live_sends(self, send_log: SendLog):
+        """If send outcome is uncertain, release_claim(STATUS_UNCERTAIN) blocks live sends to avoid duplicates."""
+        claimed, _ = send_log.claim_for_sending("d-unc", "uncertain@test.com", "camp-unc", dry_run=False)
+        assert claimed is True
+
+        send_log.release_claim("d-unc", STATUS_UNCERTAIN)
+        assert send_log.get_status("d-unc") == STATUS_UNCERTAIN
+        assert send_log.has_uncertain_send("uncertain@test.com", "camp-unc")
+
+        # Future live claims are blocked because status is UNCERTAIN
+        c_next, r_next = send_log.claim_for_sending("d-unc-2", "uncertain@test.com", "camp-unc", dry_run=False)
+        assert c_next is False
+        assert r_next == "UNCERTAIN_SEND"
+
+    def test_dry_run_claim_does_not_block_simulations(self, send_log: SendLog):
+        """A simulated send must not be treated as a confirmed live send, and must not block a subsequent live send."""
+        c1, _ = send_log.claim_for_sending("d-sim-1", "dry@test.com", "camp-dry", dry_run=True)
+        assert c1 is True
+        send_log.record_simulated("d-sim-1", "dry@test.com", "camp-dry")
+        assert send_log.was_simulated("dry@test.com", "camp-dry")
+        # Critical rule: Simulated send must NEVER be counted as a successful live send
+        assert not send_log.was_successfully_sent("dry@test.com", "camp-dry")
+
+        # A future live send claim (dry_run=False) for a different draft to this recipient is NOT blocked by simulation
+        c_live, r_live = send_log.claim_for_sending("d-live-1", "dry@test.com", "camp-dry", dry_run=False)
+        assert c_live is True
+        assert r_live == "CLAIMED"
+
+    def test_changed_recipient_updates_send_log_record(self, send_log: SendLog):
+        """When recipient is edited on a draft, upsert updates the recipient and allows the old one to be free."""
+        send_log.record_draft("d-edit", "original@corp.com", "camp-edit")
+        assert send_log.get_status("d-edit") == STATUS_DRAFT
+
+        # Edit recipient
+        send_log.record_draft("d-edit", "updated@corp.com", "camp-edit")
+        entries = send_log.list_all()
+        assert len(entries) == 1
+        assert entries[0]["recipient"] == "updated@corp.com"
+

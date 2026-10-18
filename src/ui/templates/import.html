@@ -400,6 +400,7 @@
 
     <!-- Final Launch Form -->
     <form id="finalProcessForm" action="{{ url_for('process_batch_run') }}" method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="file_token" id="formFileToken">
       <input type="hidden" name="sheet_name" id="formSheetName">
       <input type="hidden" name="mapping" id="formMappingJson">
@@ -712,6 +713,14 @@
       form.method = "POST";
       form.action = "/contacts/download-report";
       form.style.display = "none";
+
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      if (csrfMeta) {
+        const csrfInp = document.createElement("input");
+        csrfInp.name = "csrf_token";
+        csrfInp.value = csrfMeta.content;
+        form.appendChild(csrfInp);
+      }
 
       const tokenInp = document.createElement("input");
       tokenInp.name = "file_token";

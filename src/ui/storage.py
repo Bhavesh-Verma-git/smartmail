@@ -124,18 +124,18 @@ def register_uploaded_cv(file_path: str | Path, original_filename: str | None = 
 
 
 def store_and_register_cv(
-    file_bytes: bytes,
+    file_bytes: bytes | Any,
     original_filename: str,
     output_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     """
     Validate, store securely in output/uploaded_cvs/ with unique server filename,
-    and register in session.
+    and register in session. Accepts raw bytes or file stream.
     """
     import re
     from src.ui.cv_validator import validate_cv_stream
 
-    # Validate stream
+    # Validate stream/bytes
     val_res = validate_cv_stream(file_bytes, original_filename)
     if not val_res.is_valid:
         raise ValueError(val_res.error)
@@ -147,7 +147,8 @@ def store_and_register_cv(
     safe_name = re.sub(r"[^\w\.\-]", "_", Path(original_filename).name)
     unique_filename = f"cv_{uuid.uuid4().hex[:12]}_{safe_name}"
     dest_path = (cv_dir / unique_filename).resolve()
-    dest_path.write_bytes(file_bytes)
+    bytes_to_write = val_res.validated_bytes if val_res.validated_bytes else (file_bytes if isinstance(file_bytes, bytes) else b"")
+    dest_path.write_bytes(bytes_to_write)
 
     session = get_session()
     session["uploaded_cv_path"] = str(dest_path)
@@ -217,11 +218,15 @@ def save_draft_record(
 
 
 def get_draft(draft_id: str) -> dict[str, Any] | None:
-    """Retrieve draft data from disk."""
-    file_path = _DRAFTS_DIR / f"{draft_id}.json"
-    if not file_path.exists():
+    """Retrieve draft data from disk safely avoiding path traversal."""
+    import re
+    safe_id = Path(draft_id).name
+    if not re.match(r"^[\w\-]+$", safe_id):
         return None
+    file_path = (_DRAFTS_DIR / f"{safe_id}.json").resolve()
     try:
+        if not file_path.is_relative_to(_DRAFTS_DIR.resolve()) or not file_path.exists():
+            return None
         return json.loads(file_path.read_text(encoding="utf-8"))
     except Exception:
         return None
@@ -426,11 +431,15 @@ def save_batch_record(batch_id: str, record: dict[str, Any]) -> None:
 
 
 def get_batch_record(batch_id: str) -> dict[str, Any] | None:
-    """Load a batch processing record."""
-    fp = _BATCHES_DIR / f"{batch_id}.json"
-    if not fp.exists():
+    """Load a batch processing record safely avoiding path traversal."""
+    import re
+    safe_id = Path(batch_id).name
+    if not re.match(r"^[\w\-]+$", safe_id):
         return None
+    fp = (_BATCHES_DIR / f"{safe_id}.json").resolve()
     try:
+        if not fp.is_relative_to(_BATCHES_DIR.resolve()) or not fp.exists():
+            return None
         return json.loads(fp.read_text(encoding="utf-8"))
     except Exception:
         return None

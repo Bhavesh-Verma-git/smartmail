@@ -58,7 +58,8 @@ def _email_addr(profile: dict[str, Any]) -> str:
 
 def _availability(profile: dict[str, Any]) -> str:
     prefs = profile.get("preferences", {})
-    return prefs.get("availability_duration_months", "3–6 months")
+    val = prefs.get("availability_duration_months")
+    return str(val).strip() if val else ""
 
 
 def _format_internship_duration(raw: str) -> str:
@@ -70,7 +71,7 @@ def _format_internship_duration(raw: str) -> str:
     """
     s = (raw or "").strip()
     if not s:
-        return "a 3–6 month internship"
+        return "an internship"
 
     # Normalize hyphens and whitespace
     s = re.sub(r"\s*[-–]\s*", "–", s)
@@ -242,14 +243,41 @@ def _build_alignment_paragraph(
                 f"reliable, production-grade AI architectures."
             )
 
-        # Uploaded CV Mode with verified AI company
-        return (
-            f"{tech_intro}I believe my background aligns well with your team's technical initiatives. "
-            f"During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
-            f"working with tools such as Stable Diffusion and ControlNet. "
-            f"Additionally, I have practical experience building context-aware AI middleware and RAG architectures "
-            f"with an emphasis on low-latency inference and system reliability."
-        )
+        # Ground uploaded CV highlights in what actually matched
+        areas_lower = [a.lower() for a in matched_areas]
+        has_genai = any(any(k in a for k in ("generative", "llm", "agent", "rag", "retrieval", "diffusion")) for a in areas_lower)
+        has_nlp = any(any(k in a for k in ("nlp", "language", "embedding", "text")) for a in areas_lower)
+        has_ml = any(any(k in a for k in ("predictive", "machine learning", "data science", "analytics")) for a in areas_lower)
+        has_vision = any(any(k in a for k in ("vision", "media", "image")) for a in areas_lower)
+
+        highlight_sentences = []
+        if has_genai or has_vision:
+            highlight_sentences.append(
+                "During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
+                "working with tools such as Stable Diffusion and ControlNet."
+            )
+            highlight_sentences.append(
+                "Additionally, I have practical experience building context-aware AI middleware and RAG architectures "
+                "with an emphasis on low-latency inference and system reliability."
+            )
+        elif has_nlp:
+            highlight_sentences.append(
+                "I have practical experience developing NLP pipelines, language embeddings with DeBERTa-v3, "
+                "and sequence models for text classification and attribute extraction."
+            )
+        elif has_ml:
+            highlight_sentences.append(
+                "I have practical experience developing machine learning workflows, automated ETL pipelines, "
+                "and classification systems using Scikit-learn, XGBoost, and containerized architectures."
+            )
+        else:
+            highlight_sentences.append(
+                "I believe my background in applied machine learning, neural architectures, "
+                "and production pipelines aligns well with your team's technical initiatives."
+            )
+
+        highlights_text = " ".join(highlight_sentences)
+        return f"{tech_intro}I believe my background aligns well with your team's technical initiatives. {highlights_text}"
 
     # Truthful neutral candidate overview when company evidence is absent or unverified
     return (
@@ -260,13 +288,16 @@ def _build_alignment_paragraph(
 
 
 def _build_closing(availability: str) -> str:
-    """Return a concise closing paragraph with grammatically correct availability."""
-    duration_phrase = _format_internship_duration(availability)
-    return (
-        f"I have attached my CV for your review and would welcome the opportunity to discuss "
-        f"how my technical background can contribute to your team. "
-        f"I am available for {duration_phrase}."
+    """Return a concise closing paragraph with grammatically correct availability if known."""
+    base = (
+        "I have attached my CV for your review and would welcome the opportunity to discuss "
+        "how my technical background can contribute to your team."
     )
+    clean_avail = (availability or "").strip()
+    if not clean_avail:
+        return base
+    duration_phrase = _format_internship_duration(clean_avail)
+    return f"{base} I am available for {duration_phrase}."
 
 
 def _build_signature(profile: dict[str, Any]) -> str:
@@ -462,6 +493,10 @@ def draft_outreach_email(
         if flag not in review_flags:
             review_flags.append(flag)
 
+    if not availability:
+        review_required = True
+        review_flags.append("Candidate availability unknown: duration claim omitted and requires human review.")
+
     # ---- 4. Context detection -----------------------------------------------
     ctx_result = detect_outreach_context(contact_notes)
     context = ctx_result.context
@@ -471,6 +506,7 @@ def draft_outreach_email(
         if not referrer_name:
             review_required = True
             review_flags.append("Referral not verified: referral mentioned in notes but no referrer name confirmed.")
+            context = OutreachContext.DIRECT_APPLICATION
     elif ctx_result.review_required:
         review_required = True
         review_flags.append(f"Outreach context ambiguous: {ctx_result.detection_notes}")

@@ -103,11 +103,53 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB max body size
+    app.config.setdefault("WTF_CSRF_ENABLED", True)
     if is_production:
         app.config["SESSION_COOKIE_SECURE"] = True
 
     if test_config:
         app.config.update(test_config)
+
+    @app.before_request
+    def check_csrf() -> Any:
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            if not app.config.get("WTF_CSRF_ENABLED", True):
+                return None
+            from flask import session
+            expected = session.get("csrf_token")
+            token = (
+                request.form.get("csrf_token")
+                or request.headers.get("X-CSRFToken")
+                or request.headers.get("X-CSRF-Token")
+            )
+            if not token and request.is_json:
+                data = request.get_json(silent=True)
+                if isinstance(data, dict):
+                    token = data.get("csrf_token")
+
+            if not expected or not token or not secrets.compare_digest(str(token), str(expected)):
+                is_ajax = (
+                    request.is_json
+                    or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                    or "application/json" in request.headers.get("Accept", "")
+                )
+                if is_ajax:
+                    return jsonify({"success": False, "error": "CSRF validation failed: missing or invalid CSRF token."}), 400
+                return "CSRF validation failed: missing or invalid CSRF token.", 400
+        return None
+
+    @app.errorhandler(413)
+    def request_entity_too_large(error: Any) -> Any:
+        is_ajax = (
+            request.is_json
+            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in request.headers.get("Accept", "")
+        )
+        if is_ajax:
+            return jsonify({"success": False, "error": "Uploaded file exceeds maximum allowed size (16 MB)."}), 413
+        flash("The uploaded file exceeds the 16 MB size limit.", "danger")
+        return redirect(request.referrer or url_for("dashboard")), 413
 
     @app.template_filter("normalize_evidence")
     def jinja_normalize_evidence(evidence_data: Any) -> list[dict[str, str]]:
@@ -118,9 +160,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     @app.context_processor
     def inject_global_template_defaults() -> dict[str, Any]:
+        from flask import session
+        if "csrf_token" not in session:
+            session["csrf_token"] = secrets.token_hex(32)
         return {
             "standard_fields": list(STANDARD_FIELDS),
             "field_descriptions": FIELD_DESCRIPTIONS,
+            "csrf_token": session["csrf_token"],
         }
 
     # -----------------------------------------------------------------------
@@ -738,13 +784,25 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
         send_res: SendResult = workflow.send_draft(draft_id)
 
+        draft_file = Path("output/.drafts") / f"{draft_id}.json"
         if send_res.success:
-            # Update local disk status to SIMULATED_SENT
-            draft["status"] = DraftStatus.SIMULATED_SENT.value
-            draft_file = Path("output/.drafts") / f"{draft_id}.json"
+            if is_dry_run:
+                draft["status"] = DraftStatus.SIMULATED_SENT.value
+            else:
+                draft["status"] = DraftStatus.SENT.value
             if draft_file.exists():
                 _atomic_write_json(draft_file, draft)
             flash(f"Send outcome: {send_res.message}", "success")
+        elif send_res.error == "UNCERTAIN_SEND":
+            draft["status"] = DraftStatus.UNCERTAIN.value
+            if draft_file.exists():
+                _atomic_write_json(draft_file, draft)
+            flash(f"Send outcome uncertain ({send_res.error}): {send_res.message}", "warning")
+        elif send_res.error == "PROVIDER_ERROR":
+            draft["status"] = DraftStatus.FAILED.value
+            if draft_file.exists():
+                _atomic_write_json(draft_file, draft)
+            flash(f"Send failed ({send_res.error}): {send_res.message}", "danger")
         else:
             flash(f"Send blocked ({send_res.error}): {send_res.message}", "warning")
 
@@ -785,8 +843,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             return redirect(url_for("import_contacts_page"))
 
         try:
-            file_bytes = file.read()
-            meta = store_and_register_cv(file_bytes=file_bytes, original_filename=file.filename)
+            meta = store_and_register_cv(file_bytes=file.stream, original_filename=file.filename)
             if is_ajax:
                 return jsonify({"success": True, "cv": meta})
             flash(f"Successfully registered CV: {meta['filename']} ({meta['size_formatted']})", "success")

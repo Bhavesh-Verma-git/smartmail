@@ -27,6 +27,7 @@ class CVValidationResult:
     page_count: int = 0
     error: str | None = None
     sha256: str | None = None
+    validated_bytes: bytes = b""
 
 
 def format_file_size(size_bytes: int) -> str:
@@ -45,37 +46,65 @@ def validate_cv_stream(
     max_size_bytes: int = MAX_CV_SIZE_BYTES,
 ) -> CVValidationResult:
     """
-    Validate a CV file stream or raw bytes.
+    Validate a CV file stream or raw bytes without reading unbounded data into memory.
 
     Checks:
     1. Filename has a supported extension (.pdf).
     2. File is not empty (size > 0).
-    3. File does not exceed max_size_bytes.
+    3. File does not exceed max_size_bytes (aborts reading early).
     4. File header starts with valid PDF magic bytes (%PDF-).
     5. File is parseable by pypdf without corruption.
     6. PDF is not encrypted / password-protected.
     7. PDF has at least one valid page.
     """
-    if isinstance(stream, bytes):
-        raw_bytes = stream
-    else:
-        raw_bytes = stream.read()
-
-    size_bytes = len(raw_bytes)
-    size_formatted = format_file_size(size_bytes)
-
-    # 1. Check extension
+    # 1. Check extension first before reading stream
     suffix = Path(filename).suffix.lower()
     if suffix != ".pdf":
         return CVValidationResult(
             is_valid=False,
             filename=filename,
-            size_bytes=size_bytes,
-            size_formatted=size_formatted,
+            size_bytes=0,
+            size_formatted="0 B",
             error=f"Unsupported file format '{suffix}'. Only standard PDF (.pdf) documents are accepted.",
         )
 
-    # 2. Check empty file
+    # 2. Read in chunks with early abort to protect against memory exhaustion
+    if isinstance(stream, bytes):
+        raw_bytes = stream
+        size_bytes = len(raw_bytes)
+        if size_bytes > max_size_bytes:
+            max_formatted = format_file_size(max_size_bytes)
+            return CVValidationResult(
+                is_valid=False,
+                filename=filename,
+                size_bytes=size_bytes,
+                size_formatted=format_file_size(size_bytes),
+                error=f"File exceeds maximum allowed size ({max_formatted}). Your file is {format_file_size(size_bytes)}.",
+            )
+    else:
+        chunks: list[bytes] = []
+        size_bytes = 0
+        chunk_size = 65536
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            size_bytes += len(chunk)
+            if size_bytes > max_size_bytes:
+                max_formatted = format_file_size(max_size_bytes)
+                return CVValidationResult(
+                    is_valid=False,
+                    filename=filename,
+                    size_bytes=size_bytes,
+                    size_formatted=format_file_size(size_bytes),
+                    error=f"File exceeds maximum allowed size ({max_formatted}).",
+                )
+            chunks.append(chunk)
+        raw_bytes = b"".join(chunks)
+
+    size_formatted = format_file_size(size_bytes)
+
+    # 3. Check empty file
     if size_bytes == 0:
         return CVValidationResult(
             is_valid=False,
@@ -83,17 +112,6 @@ def validate_cv_stream(
             size_bytes=0,
             size_formatted="0 B",
             error="The uploaded file is completely empty (0 bytes). Please upload a valid CV document.",
-        )
-
-    # 3. Check maximum size limit
-    if size_bytes > max_size_bytes:
-        max_formatted = format_file_size(max_size_bytes)
-        return CVValidationResult(
-            is_valid=False,
-            filename=filename,
-            size_bytes=size_bytes,
-            size_formatted=size_formatted,
-            error=f"File exceeds maximum allowed size ({max_formatted}). Your file is {size_formatted}.",
         )
 
     # 4. Check PDF magic bytes
@@ -151,6 +169,7 @@ def validate_cv_stream(
         page_count=page_count,
         sha256=sha256,
         error=None,
+        validated_bytes=raw_bytes,
     )
 
 

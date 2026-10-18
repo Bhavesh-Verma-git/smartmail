@@ -439,35 +439,28 @@ class OutreachWorkflow:
         return draft
 
     def send_draft(self, draft_id: str) -> SendResult:
-        """Attempt to send an approved draft through safeguards."""
+        """Attempt to send an approved draft through safeguards and atomic reservation."""
         draft = self.review_manager.get_draft(draft_id)
 
-        # Persistent duplicate check across restarts (both live sends and simulated sends in dry run)
-        if self.send_log.was_successfully_sent(draft.recipient, self.campaign_id):
+        # Atomic reservation / claim against persistent SQLite send_log
+        claimed, claim_reason = self.send_log.claim_for_sending(
+            draft_id=draft_id,
+            recipient=draft.recipient,
+            campaign_id=self.campaign_id,
+            dry_run=self.sender.dry_run,
+        )
+        if not claimed:
+            msg_map = {
+                "DUPLICATE_RECIPIENT": f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
+                "UNCERTAIN_SEND": f"Send blocked: A previous send to {draft.recipient} had an uncertain outcome. Manual reconciliation required before resending.",
+                "SEND_IN_PROGRESS": f"Send blocked: A send attempt to {draft.recipient} is currently in progress.",
+            }
             return SendResult(
                 success=False,
                 draft_id=draft_id,
                 recipient=draft.recipient,
-                message=f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
-                error="DUPLICATE_RECIPIENT",
-            )
-        if self.sender.dry_run and self.send_log.was_simulated(draft.recipient, self.campaign_id):
-            return SendResult(
-                success=False,
-                draft_id=draft_id,
-                recipient=draft.recipient,
-                message=f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
-                error="DUPLICATE_RECIPIENT",
-            )
-
-        # Safety check: do not blindly retry an uncertain send outcome
-        if self.send_log.has_uncertain_send(draft.recipient, self.campaign_id):
-            return SendResult(
-                success=False,
-                draft_id=draft_id,
-                recipient=draft.recipient,
-                message=f"Send blocked: A previous send to {draft.recipient} had an uncertain outcome. Manual reconciliation required before resending.",
-                error="UNCERTAIN_SEND",
+                message=msg_map.get(claim_reason, f"Send blocked: {claim_reason}."),
+                error=claim_reason,
             )
 
         result = self.sender.send(draft_id)
@@ -484,7 +477,27 @@ class OutreachWorkflow:
                     recipient=draft.recipient,
                     campaign_id=self.campaign_id,
                 )
-        elif result.error not in ("APPROVAL_REQUIRED", "DUPLICATE_RECIPIENT", "LIVE_SENDING_DISABLED", "GMAIL_NOT_CONFIGURED", "UNCERTAIN_SEND", "INVALID_RECIPIENT", "EMPTY_SUBJECT", "EMPTY_BODY", "ATTACHMENT_NOT_FOUND"):
+        elif result.error == "UNCERTAIN_SEND":
+            self.send_log.record_uncertain(
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                campaign_id=self.campaign_id,
+            )
+        elif result.error in (
+            "APPROVAL_REQUIRED",
+            "DUPLICATE_RECIPIENT",
+            "LIVE_SENDING_DISABLED",
+            "GMAIL_NOT_CONFIGURED",
+            "INVALID_RECIPIENT",
+            "EMPTY_SUBJECT",
+            "EMPTY_BODY",
+            "MISSING_ATTACHMENT",
+            "ATTACHMENT_NOT_FOUND",
+            "SEND_IN_PROGRESS",
+        ):
+            status_restore = "APPROVED" if draft.approved else "DRAFT"
+            self.send_log.release_claim(draft_id=draft_id, status=status_restore)
+        else:
             self.send_log.record_failed(
                 draft_id=draft_id,
                 recipient=draft.recipient,

@@ -23,6 +23,8 @@ class DraftStatus(str, Enum):
     SENT = "SENT"
     SIMULATED_SENT = "SIMULATED_SENT"
     REJECTED = "REJECTED"
+    FAILED = "FAILED"
+    UNCERTAIN = "UNCERTAIN"
 
 
 class GenerationStatus(str, Enum):

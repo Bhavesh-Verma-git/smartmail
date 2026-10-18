@@ -90,6 +90,7 @@
       </p>
 
       <form action="{{ url_for('upload_cv_file_route') }}" method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
           <label class="form-label">Select CV Document</label>
           <input type="file" name="cv_file" class="form-control" accept=".pdf,.docx" required>
@@ -120,6 +121,7 @@
       </p>
 
       <form action="{{ url_for('test_cv_tailoring_route') }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
           <label class="form-label" for="tailorCompany">Target Company</label>
           <input type="text" id="tailorCompany" name="target_company" class="form-control" value="Acme AI Labs" placeholder="e.g. Acme AI Labs" required>

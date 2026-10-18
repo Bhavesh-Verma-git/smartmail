@@ -46,6 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_draft_id  ON send_log (draft_id);
 # Status constants
 STATUS_DRAFT = "DRAFT"
 STATUS_APPROVED = "APPROVED"
+STATUS_SENDING = "SENDING"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_SIMULATED = "SIMULATED"
 STATUS_FAILED = "FAILED"
@@ -144,6 +145,106 @@ class SendLog:
         """
         self._upsert(draft_id, recipient, campaign_id, STATUS_UNCERTAIN)
 
+    def claim_for_sending(
+        self,
+        draft_id: str,
+        recipient: str,
+        campaign_id: str = "",
+        dry_run: bool = True,
+    ) -> tuple[bool, str]:
+        """
+        Atomically reserve a draft and recipient for sending.
+        Prevents concurrent requests from dispatching the same recipient/campaign.
+        Returns (True, "CLAIMED") on success, or (False, reason) if blocked.
+        """
+        now = _now_iso()
+        recipient_norm = recipient.strip().lower()
+
+        with self._lock:
+            with self._connect() as conn:
+                # 1. Duplicate check: Confirmed live send exists
+                row_success = conn.execute(
+                    """
+                    SELECT id FROM send_log
+                    WHERE recipient = ? AND campaign_id = ? AND status = ?
+                    LIMIT 1
+                    """,
+                    (recipient_norm, campaign_id, STATUS_SUCCESS),
+                ).fetchone()
+                if row_success:
+                    return False, "DUPLICATE_RECIPIENT"
+
+                # 2. Simulated duplicate check (only in dry-run mode)
+                if dry_run:
+                    row_sim = conn.execute(
+                        """
+                        SELECT id FROM send_log
+                        WHERE recipient = ? AND campaign_id = ? AND status = ?
+                        LIMIT 1
+                        """,
+                        (recipient_norm, campaign_id, STATUS_SIMULATED),
+                    ).fetchone()
+                    if row_sim:
+                        return False, "DUPLICATE_RECIPIENT"
+
+                # 3. Check for unresolved uncertain send
+                row_unc = conn.execute(
+                    """
+                    SELECT id FROM send_log
+                    WHERE recipient = ? AND campaign_id = ? AND status = ?
+                    LIMIT 1
+                    """,
+                    (recipient_norm, campaign_id, STATUS_UNCERTAIN),
+                ).fetchone()
+                if row_unc:
+                    return False, "UNCERTAIN_SEND"
+
+                # 4. Check for active concurrent in-flight claim
+                row_sending = conn.execute(
+                    """
+                    SELECT id, draft_id FROM send_log
+                    WHERE recipient = ? AND campaign_id = ? AND status = ?
+                    LIMIT 1
+                    """,
+                    (recipient_norm, campaign_id, STATUS_SENDING),
+                ).fetchone()
+                if row_sending:
+                    return False, "SEND_IN_PROGRESS"
+
+                # 5. Acquire reservation/claim
+                row_draft = conn.execute(
+                    "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
+                ).fetchone()
+                if row_draft:
+                    conn.execute(
+                        "UPDATE send_log SET status = ?, recipient = ?, campaign_id = ?, updated_at = ? WHERE draft_id = ?",
+                        (STATUS_SENDING, recipient_norm, campaign_id, now, draft_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO send_log
+                            (draft_id, recipient, campaign_id, status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (draft_id, recipient_norm, campaign_id, STATUS_SENDING, now, now),
+                    )
+                return True, "CLAIMED"
+
+    def release_claim(
+        self,
+        draft_id: str,
+        status: str = STATUS_APPROVED,
+    ) -> None:
+        """Release an in-flight send reservation back to approved (or draft)."""
+        now = _now_iso()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE send_log SET status = ?, updated_at = ? WHERE draft_id = ? AND status = ?",
+                    (status, now, draft_id, STATUS_SENDING),
+                )
+
     def _upsert(
         self,
         draft_id: str,
@@ -162,13 +263,13 @@ class SendLog:
                 if row:
                     if campaign_id:
                         conn.execute(
-                            "UPDATE send_log SET status=?, updated_at=?, campaign_id=? WHERE draft_id=?",
-                            (status, now, campaign_id, draft_id),
+                            "UPDATE send_log SET status=?, recipient=?, updated_at=?, campaign_id=? WHERE draft_id=?",
+                            (status, recipient_norm, now, campaign_id, draft_id),
                         )
                     else:
                         conn.execute(
-                            "UPDATE send_log SET status=?, updated_at=? WHERE draft_id=?",
-                            (status, now, draft_id),
+                            "UPDATE send_log SET status=?, recipient=?, updated_at=? WHERE draft_id=?",
+                            (status, recipient_norm, now, draft_id),
                         )
                 else:
                     conn.execute(

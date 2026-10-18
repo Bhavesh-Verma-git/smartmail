@@ -682,3 +682,93 @@ class TestEngineContactNotesWiring:
         r_b = workflow.process_contact(contact=contact_b, research_provider=MockResearchProvider())
         assert r_a.draft is not None and r_b.draft is not None
         assert r_a.draft.draft_id != r_b.draft.draft_id
+
+
+# ---------------------------------------------------------------------------
+# Section 10: Truthful Drafting & Adversarial Regressions
+# ---------------------------------------------------------------------------
+
+class TestTruthfulContentAndAdversarialDrafting:
+    """Regression tests for truthfulness, grounded technical claims, and adversarial inputs."""
+
+    @pytest.fixture
+    def profile_without_availability(self):
+        p = dict(PROFILE)
+        p["preferences"] = {}
+        return p
+
+    def test_missing_candidate_availability_omits_claim_and_sets_review_flag(
+        self, profile_without_availability
+    ):
+        """When availability is unknown, draft omits duration claims and flags for review."""
+        pipe = _make_pipeline_result(matched_areas=["Generative AI"])
+        draft = draft_outreach_email(
+            profile=profile_without_availability,
+            recipient_email="lead@acme.ai",
+            company_name="Acme AI",
+            contact_name="Dr. Smith",
+            target_role="AI Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        assert "3-6 month" not in draft.body
+        assert "3–6 month" not in draft.body
+        # Must flag review required because candidate availability duration is omitted
+        assert draft.review_required is True
+        assert any("availability unknown" in f.lower() for f in draft.review_flags)
+
+    def test_referral_context_without_referrer_name_falls_back_to_direct_application(self):
+        """Referral context without verified referrer name falls back to direct application."""
+        pipe = _make_pipeline_result(matched_areas=["Generative AI"])
+        draft = draft_outreach_email(
+            profile=PROFILE,
+            recipient_email="lead@acme.ai",
+            company_name="Acme AI",
+            contact_name="Alice",
+            target_role="AI Intern",
+            contact_notes="Referred by engineering director",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        # Must not fabricate 'Referred by' in subject or body
+        assert "referred by none" not in draft.subject.lower()
+        assert "referred by none" not in draft.body.lower()
+        assert "referred by" not in draft.subject.lower()
+        # Must flag for human review
+        assert draft.review_required is True
+
+    def test_unknown_recipient_uses_clean_team_salutation(self):
+        """Unknown or empty recipient name produces clean team salutation without hallucination."""
+        pipe = _make_pipeline_result(matched_areas=["Generative AI"])
+        draft = draft_outreach_email(
+            profile=PROFILE,
+            recipient_email="hiring@deepinnovate.ai",
+            company_name="DeepInnovate",
+            contact_name="",
+            target_role="AI Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        assert "Dear DeepInnovate Team," in draft.body or "Dear Hiring Team at DeepInnovate," in draft.body
+        assert "Dear ," not in draft.body
+        assert "Dear None," not in draft.body
+
+    def test_company_with_generic_ai_buzzwords_not_grounded(self):
+        """Company with superficial 'AI' buzzwords without verified ML areas produces grounded, uninflated draft."""
+        # 0 verified matched technical areas, non-relevant outcome
+        pipe = _make_pipeline_result(matched_areas=[], relevance_status="NOT_RELEVANT", overall_status="REVIEW")
+        draft = draft_outreach_email(
+            profile=PROFILE,
+            recipient_email="recruiter@buzzcorp.example",
+            company_name="Generic Buzz Corp",
+            contact_name="Recruiter",
+            target_role="AI/ML Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        # Should not falsely claim specific shared engineering focus on nonexistent areas
+        assert "focus on " not in draft.body
+        # Review required flag is raised because no areas matched
+        assert draft.review_required is True
+        assert any("technical relevance unverified" in f.lower() for f in draft.review_flags)
+

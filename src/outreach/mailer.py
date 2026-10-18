@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
-
+from src.contacts.email_parser import parse_email
 from src.outreach.models import DraftStatus, EmailDraft, SendResult
 
 
@@ -154,7 +153,8 @@ class EmailSender:
 
         # Safeguard 1: Field validation
         recipient_clean = (draft.recipient or "").strip()
-        if not recipient_clean or "@" not in recipient_clean:
+        parsed_email = parse_email(recipient_clean)
+        if not parsed_email.is_syntax_valid:
             return SendResult(
                 success=False,
                 draft_id=draft_id,
@@ -188,7 +188,7 @@ class EmailSender:
             )
         att_str = str(draft.attachment_path).strip()
         att_path = Path(att_str)
-        if att_str not in ("cv.pdf", "dummy_cv.pdf") and not att_path.exists():
+        if not att_path.exists():
             return SendResult(
                 success=False,
                 draft_id=draft_id,
@@ -247,12 +247,15 @@ class EmailSender:
                     message="Email sent successfully via injected provider.",
                 )
             except Exception as e:
+                err_lower = str(e).lower()
+                is_timeout = any(kw in err_lower for kw in ("timeout", "timed out", "connection reset", "broken pipe"))
+                err_code = "UNCERTAIN_SEND" if is_timeout else "PROVIDER_ERROR"
                 return SendResult(
                     success=False,
                     draft_id=draft_id,
                     recipient=draft.recipient,
                     message=f"Provider failed to send email: {e}",
-                    error=str(e),
+                    error=err_code,
                 )
 
         # Check Gmail configuration honestly if in non-dry-run mode without custom provider

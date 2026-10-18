@@ -597,3 +597,73 @@ def test_atomic_write_storage_helper(tmp_path: Path):
     _atomic_write_json(target, data)
     assert json.loads(target.read_text(encoding="utf-8")) == data
 
+
+def test_csrf_protection_enforced_when_enabled(tmp_path: Path, test_send_log: SendLog):
+    """When WTF_CSRF_ENABLED is True, POST routes require a valid session CSRF token."""
+    app = create_app({
+        "TESTING": True,
+        "SEND_LOG_PATH": str(test_send_log._db_path),
+        "WTF_CSRF_ENABLED": True,
+        "SECRET_KEY": "test-csrf-secret-key",
+    })
+    with app.test_client() as c:
+        # Establish session by visiting a GET route
+        res_get = c.get("/")
+        assert res_get.status_code == 200
+
+        # POST without CSRF token must fail with 400
+        res_fail = c.post("/cv/clear")
+        assert res_fail.status_code == 400
+        assert "CSRF validation failed" in res_fail.data.decode("utf-8")
+
+        # Now get the valid token from the session
+        with c.session_transaction() as sess:
+            valid_token = sess.get("csrf_token")
+        assert valid_token is not None
+
+        # POST with header X-CSRFToken succeeds (redirects back to settings page)
+        res_ok = c.post("/cv/clear", headers={"X-CSRFToken": valid_token})
+        assert res_ok.status_code in (200, 302)
+
+
+def test_draft_path_traversal_rejected(client: FlaskClient):
+    """Path traversal characters in draft_id cannot escape storage directory."""
+    from src.ui.storage import get_draft
+    # Storage layer rejects path traversal and returns None
+    assert get_draft("../../etc/passwd") is None
+    assert get_draft("..\\..\\windows\\win.ini") is None
+    assert get_draft("valid_id_with_safe_chars_123") is None
+
+    # Route layer safely redirects without crashing or leaking file paths
+    res = client.get("/drafts/.._invalid_id", follow_redirects=True)
+    assert res.status_code == 200
+    assert "not found" in res.data.decode("utf-8").lower()
+
+
+def test_cv_streaming_size_limit_rejection():
+    """CV validator streaming rejects files larger than limit without unbounded memory buffering."""
+    from src.ui.cv_validator import validate_cv_stream
+
+    class OversizedDummyStream:
+        def __init__(self, total_bytes: int):
+            self.total = total_bytes
+            self.read_so_far = 0
+
+        def read(self, chunk_size=65536):
+            if self.read_so_far >= self.total:
+                return b""
+            if self.read_so_far == 0:
+                chunk = b"%PDF-1.4 " + b"X" * (chunk_size - 9)
+            else:
+                chunk = b"X" * min(chunk_size, self.total - self.read_so_far)
+            self.read_so_far += len(chunk)
+            return chunk
+
+    # 11MB stream
+    stream = OversizedDummyStream(11 * 1024 * 1024)
+    res = validate_cv_stream(stream, "large.pdf", max_size_bytes=10 * 1024 * 1024)
+    assert not res.is_valid
+    assert "exceeds" in res.error.lower()
+
+
+

@@ -3,6 +3,37 @@
  * Handles CSV pre-upload validation preview, confirmation modals, draft editing, and interactive controls.
  */
 
+// Automatically attach CSRF token to state-changing fetch requests
+(function() {
+  const originalFetch = window.fetch;
+  window.fetch = function(url, options = {}) {
+    const method = (options.method || "GET").toUpperCase();
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      const token = csrfMeta ? csrfMeta.getAttribute("content") : "";
+      if (token) {
+        if (!options.headers) {
+          options.headers = {};
+        }
+        if (options.headers instanceof Headers) {
+          if (!options.headers.has("X-CSRFToken")) {
+            options.headers.set("X-CSRFToken", token);
+          }
+        } else if (Array.isArray(options.headers)) {
+          if (!options.headers.some(h => h[0].toLowerCase() === "x-csrftoken")) {
+            options.headers.push(["X-CSRFToken", token]);
+          }
+        } else {
+          if (!options.headers["X-CSRFToken"]) {
+            options.headers["X-CSRFToken"] = token;
+          }
+        }
+      }
+    }
+    return originalFetch(url, options);
+  };
+})();
+
 document.addEventListener("DOMContentLoaded", () => {
   initMobileSidebar();
   initDropzone();

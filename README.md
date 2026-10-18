@@ -146,7 +146,7 @@ Then open `http://127.0.0.1:5000` in your web browser.
 4. **Preview & Verify**: Inspect parsed rows and syntax validation flags.
 5. **Run Batch Pipeline**: Execute company research, AI relevance scoring, and draft synthesis.
 6. **Review Queue**: Inspect research provenance, view AI evidence excerpts, edit subject/body, and approve/reject drafts.
-7. **Simulated Dispatch**: Test draft delivery in dry-run mode and inspect `output/send_log.json`.
+7. **Simulated Dispatch**: Test draft delivery in dry-run mode and inspect records in the SQLite send log (`data/send_log.db` or the `/send-log` web view).
 
 ### CLI Interface
 SmartMail can also be managed via the CLI:
@@ -190,11 +190,13 @@ SmartMail has an extensive test suite covering unit operations, security safegua
    - Live network transmission requires both `DRY_RUN=false` and an explicit live provider configuration.
    - Draft fields (`recipient`, `subject`, `body`, `attachment_path`) are strictly validated prior to dispatch.
    - Editing a draft immediately resets any prior `APPROVED` status back to `DRAFT`.
-   - Duplicate prevention is tracked in `output/send_log.json` and persisted across server restarts.
+   - Concurrency-safe duplicate prevention and atomic reservations are tracked in SQLite (`data/send_log.db`) across server restarts and worker threads.
 2. **Flask Security**:
-   - Session cookies configured with `HttpOnly` and `SameSite=Lax`.
-   - Random secret key generation in development with strict validation in production mode.
-   - Path traversal prevention on file token routes and CV download endpoints (`.pdf` restriction to allowed directories).
+   - CSRF protection enforced across all state-changing forms and API endpoints with session-bound tokens.
+   - Maximum request payload limit enforced (16 MB) with chunked streaming CV file validation preventing unbounded memory usage.
+   - Session cookies configured with `HttpOnly` and `SameSite=Lax` (and `Secure` in production).
+   - Random secret key generation in development with strict validation in production mode (`FLASK_SECRET_KEY`).
+   - Path traversal prevention on file token routes, draft review IDs, and CV download endpoints (`.pdf` restriction to allowed directories).
 3. **Data Protection**:
    - `.env`, `credentials.json`, `token.json`, uploaded CVs, private draft JSON, session state, and SQLite databases are excluded by `.gitignore`.
    - Contact datasets included in the repository contain only RFC 2606 synthetic `.example` domains.

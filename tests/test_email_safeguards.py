@@ -5,6 +5,8 @@ Tests for email review, approval, duplicate prevention, and verification safegua
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.contacts.csv_importer import ContactRecord
@@ -54,6 +56,22 @@ class MockBlockedResearchProvider:
             technical_areas=[],
             limitations=["Domain owned by unrelated entity"],
         )
+
+
+@pytest.fixture(autouse=True)
+def ensure_test_attachment():
+    """Ensure a real temporary cv.pdf exists during tests so tests use real files on disk."""
+    test_cv = Path("cv.pdf")
+    created = False
+    if not test_cv.exists():
+        test_cv.write_bytes(b"%PDF-1.4 test dummy cv content")
+        created = True
+    yield
+    if created and test_cv.exists():
+        try:
+            test_cv.unlink()
+        except OSError:
+            pass
 
 
 class MockSendingProvider:
