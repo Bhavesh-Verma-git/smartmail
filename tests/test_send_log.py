@@ -270,3 +270,85 @@ class TestDispatchReservationAndConcurrency:
         assert len(entries) == 1
         assert entries[0]["recipient"] == "updated@corp.com"
 
+    def test_cross_instance_concurrent_claims_prevent_duplicate_sends(self, tmp_path):
+        """
+        Verify that two completely independent SendLog instances connected to the same
+        SQLite file on disk cannot simultaneously claim the same recipient/campaign.
+        Guarantees safety across independent Flask worker processes/requests.
+        """
+        db_file = tmp_path / "cross_instance_test.db"
+        # Pre-initialize schema
+        init_log = SendLog(db_path=str(db_file))
+        assert init_log.get_status("nonexistent") is None
+
+        # Two distinct instances simulating separate Flask requests / processes
+        log_instance_a = SendLog(db_path=str(db_file))
+        log_instance_b = SendLog(db_path=str(db_file))
+
+        barrier = threading.Barrier(2)
+        results: list[tuple[int, bool, str]] = []
+
+        def worker(worker_id: int, log_inst: SendLog):
+            barrier.wait()
+            claimed, reason = log_inst.claim_for_sending(
+                draft_id=f"draft-worker-{worker_id}",
+                recipient="shared-lead@enterprise.com",
+                campaign_id="cross-instance-camp",
+                dry_run=False,
+            )
+            results.append((worker_id, claimed, reason))
+
+        t1 = threading.Thread(target=worker, args=(1, log_instance_a))
+        t2 = threading.Thread(target=worker, args=(2, log_instance_b))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        successes = [r for r in results if r[1] is True]
+        failures = [r for r in results if r[1] is False]
+
+        assert len(successes) == 1, f"Expected exactly 1 claim success across instances, got {len(successes)}"
+        assert len(failures) == 1, f"Expected exactly 1 failure across instances, got {len(failures)}"
+        assert successes[0][2] == "CLAIMED"
+        assert failures[0][2] in ("SEND_IN_PROGRESS", "CONTENTION_ERROR", "ALREADY_SENT", "DUPLICATE_RECIPIENT")
+
+    def test_cross_instance_uncertain_outcome_blocks_subsequent_instances(self, tmp_path):
+        """
+        Prove that an unresolved UNCERTAIN result recorded by instance A blocks
+        instance B from attempting blind retries.
+        """
+        db_file = tmp_path / "uncertain_test.db"
+        log_a = SendLog(db_path=str(db_file))
+        log_b = SendLog(db_path=str(db_file))
+
+        claimed, reason = log_a.claim_for_sending("draft-u1", "tim@corp.com", "camp-u", dry_run=False)
+        assert claimed is True
+        log_a.record_uncertain("draft-u1", "tim@corp.com", "camp-u")
+
+        # Instance B attempts to claim the same recipient
+        claimed_b, reason_b = log_b.claim_for_sending("draft-u2", "tim@corp.com", "camp-u", dry_run=False)
+        assert claimed_b is False
+        assert reason_b == "UNCERTAIN_SEND"
+
+    def test_cross_instance_failure_release_and_retry(self, tmp_path):
+        """
+        Prove that failure release restores state so a fresh instance can claim for retry.
+        """
+        db_file = tmp_path / "retry_test.db"
+        log_a = SendLog(db_path=str(db_file))
+        claimed, _ = log_a.claim_for_sending("draft-r1", "retry@corp.com", "camp-r", dry_run=False)
+        assert claimed is True
+
+        # Simulate provider failure and claim release
+        log_a.release_claim("draft-r1", status=STATUS_FAILED)
+
+        # Fresh instance B connects
+        log_b = SendLog(db_path=str(db_file))
+        assert log_b.get_status("draft-r1") == STATUS_FAILED
+
+        # Re-claim succeeds
+        claimed_retry, reason_retry = log_b.claim_for_sending("draft-r1", "retry@corp.com", "camp-r", dry_run=False)
+        assert claimed_retry is True
+        assert reason_retry == "CLAIMED"
+

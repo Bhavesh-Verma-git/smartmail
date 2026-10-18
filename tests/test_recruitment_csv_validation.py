@@ -103,9 +103,16 @@ class TestActualRecruitmentCSV:
         assert last_contact.row_number == 60
         assert last_contact.email_result.normalized_email == "hiringnow.ksa@example.com"
 
+    def _make_dummy_cv(self, path: Path) -> Path:
+        from pypdf import PdfWriter
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        with open(path, "wb") as f:
+            writer.write(f)
+        return path
+
     def test_email_only_contact_safely_blocked_without_fabrication(self, tmp_path: Path):
-        dummy_cv = tmp_path / "cv.pdf"
-        dummy_cv.write_bytes(b"%PDF-1.4 test")
+        dummy_cv = self._make_dummy_cv(tmp_path / "cv.pdf")
 
         result = import_contacts_from_csv("smartmail_contacts.csv")
         c1 = result.contacts[0]
@@ -125,8 +132,7 @@ class TestActualRecruitmentCSV:
         assert "Company identity and domain relationship are both unresolved" in wf_res.message
 
     def test_review_flagged_draft_approval_and_send_lifecycle(self, tmp_path: Path):
-        dummy_cv = tmp_path / "cv.pdf"
-        dummy_cv.write_bytes(b"%PDF-1.4 test")
+        dummy_cv = self._make_dummy_cv(tmp_path / "cv.pdf")
 
         result = import_contacts_from_csv("smartmail_contacts.csv")
         c1 = result.contacts[0]

@@ -222,12 +222,20 @@ def _build_alignment_paragraph(
 
     Only references company technical focus when grounded in verified matched_areas.
     Never invents company AI claims if unverified.
+    Only references candidate projects and internships when grounded in profile.
     """
     clean_company = company_name.strip() if company_name and company_name != "Unknown Company" else ""
 
     if matched_areas and clean_company:
         areas_text = ", ".join(matched_areas)
         tech_intro = f"Given {clean_company}'s focus on {areas_text}, "
+
+        # Check genuine candidate experience in profile
+        profile_exp = profile.get("experience", [])
+        profile_projects = profile.get("projects", [])
+        has_red_panda = any("red panda" in exp.get("organization", "").lower() for exp in profile_exp)
+        has_controlplane = any("controlplane" in p.get("name", "").lower() for p in profile_projects)
+        has_nlp_in_profile = any("nlp" in str(exp).lower() or "iiser" in exp.get("organization", "").lower() for exp in profile_exp) or any("nlp" in str(p).lower() for p in profile_projects)
 
         if mode == WorkflowMode.TAILORED_CV and project_selection:
             p1 = project_selection.primary_project.get("name", "")
@@ -236,14 +244,21 @@ def _build_alignment_paragraph(
             projects_summary = p1
             if p2:
                 projects_summary += f" and {p2}"
+
+            if has_red_panda:
+                intern_text = "alongside my internship experience developing diffusion pipelines and ML inference workflows, "
+            elif profile_exp:
+                intern_text = "alongside my practical internship experience in machine learning, "
+            else:
+                intern_text = ""
+
             return (
                 f"{tech_intro}I wanted to highlight my practical experience building scalable AI systems. "
-                f"Through {projects_summary}, alongside my internship experience developing "
-                f"diffusion pipelines and ML inference workflows, I have focused on building "
+                f"Through {projects_summary}, {intern_text}I have focused on building "
                 f"reliable, production-grade AI architectures."
             )
 
-        # Ground uploaded CV highlights in what actually matched
+        # Ground uploaded CV highlights in what actually matched AND what candidate has
         areas_lower = [a.lower() for a in matched_areas]
         has_genai = any(any(k in a for k in ("generative", "llm", "agent", "rag", "retrieval", "diffusion")) for a in areas_lower)
         has_nlp = any(any(k in a for k in ("nlp", "language", "embedding", "text")) for a in areas_lower)
@@ -251,16 +266,18 @@ def _build_alignment_paragraph(
         has_vision = any(any(k in a for k in ("vision", "media", "image")) for a in areas_lower)
 
         highlight_sentences = []
-        if has_genai or has_vision:
-            highlight_sentences.append(
-                "During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
-                "working with tools such as Stable Diffusion and ControlNet."
-            )
-            highlight_sentences.append(
-                "Additionally, I have practical experience building context-aware AI middleware and RAG architectures "
-                "with an emphasis on low-latency inference and system reliability."
-            )
-        elif has_nlp:
+        if (has_genai or has_vision) and (has_red_panda or has_controlplane):
+            if has_red_panda:
+                highlight_sentences.append(
+                    "During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
+                    "working with tools such as Stable Diffusion and ControlNet."
+                )
+            if has_controlplane:
+                highlight_sentences.append(
+                    "Additionally, I have practical experience building context-aware AI middleware and RAG architectures "
+                    "with an emphasis on low-latency inference and system reliability."
+                )
+        elif has_nlp and has_nlp_in_profile:
             highlight_sentences.append(
                 "I have practical experience developing NLP pipelines, language embeddings with DeBERTa-v3, "
                 "and sequence models for text classification and attribute extraction."
@@ -280,10 +297,15 @@ def _build_alignment_paragraph(
         return f"{tech_intro}I believe my background aligns well with your team's technical initiatives. {highlights_text}"
 
     # Truthful neutral candidate overview when company evidence is absent or unverified
+    if profile.get("experience"):
+        return (
+            "My background includes practical experience in applied machine learning, data systems, "
+            "and software engineering. During my previous internship experience, I worked on production ML workflows "
+            "and data pipelines, focusing on building reliable systems and practical problem-solving."
+        )
     return (
-        "My background includes practical experience in applied machine learning, generative AI pipelines, "
-        "and data systems. During my previous internship experience, I developed production-ready diffusion "
-        "and inference workflows, focusing on building reliable AI systems and practical problem-solving."
+        "My background includes practical experience in applied machine learning, data systems, "
+        "and software engineering, focusing on building reliable systems and practical problem-solving."
     )
 
 
@@ -330,50 +352,98 @@ def _determine_cv_connections(
     """
     Extract relevant verified skills and projects from candidate profile/CV
     that directly align with the verified company technical areas.
+    Never invents projects or returns ungrounded fallbacks when matched_areas is empty or unrelated.
     """
+    if not matched_areas:
+        return [], []
+
     skills: list[str] = []
     projects: list[str] = []
 
     areas_lower = [a.lower() for a in matched_areas]
 
+    # Inspect candidate profile
+    profile_projects = profile.get("projects", [])
+    profile_exp = profile.get("experience", [])
+
+    def has_project_matching(keywords: tuple[str, ...]) -> dict[str, Any] | None:
+        for p in profile_projects:
+            name_desc = (p.get("name", "") + " " + p.get("short_description", "") + " " + " ".join(p.get("technologies", []))).lower()
+            if any(k.lower() in name_desc for k in keywords):
+                return p
+        return None
+
+    def has_experience_matching(keywords: tuple[str, ...]) -> dict[str, Any] | None:
+        for exp in profile_exp:
+            exp_text = (exp.get("organization", "") + " " + exp.get("role", "") + " " + " ".join(exp.get("responsibilities", [])) + " " + " ".join(exp.get("technologies_used", []))).lower()
+            if any(k.lower() in exp_text for k in keywords):
+                return exp
+        return None
+
     # Check GenAI / LLM / Agent / RAG areas
     if any(any(k in a for k in ("generative", "llm", "agent", "rag", "retrieval", "knowledge")) for a in areas_lower):
-        skills.extend(["LangGraph", "Hybrid RAG (FAISS + BM25)", "Diffusion Pipelines (Flux, SD1.5, ControlNet)", "LiteLLM"])
-        projects.append("ControlPlane.ai (AI Governance & RAG Middleware)")
-        projects.append("Red Panda Games (Generative AI Diffusion Pipelines)")
+        cp_proj = has_project_matching(("controlplane", "langgraph", "rag"))
+        rp_exp = has_experience_matching(("red panda", "diffusion"))
+        if cp_proj:
+            projects.append(cp_proj.get("name", "ControlPlane.ai (AI Governance & RAG Middleware)"))
+            skills.extend(["LangGraph", "Hybrid RAG (FAISS + BM25)", "LiteLLM"])
+        if rp_exp:
+            projects.append(f"{rp_exp.get('organization', 'Red Panda Games')} (Generative AI Diffusion Pipelines)")
+            skills.append("Diffusion Pipelines (Flux, SD1.5, ControlNet)")
 
     # Check Computer Vision
     if any(any(k in a for k in ("vision", "media", "diffusion", "image")) for a in areas_lower):
-        skills.extend(["Diffusion Models (Flux, SD1.5, ControlNet)", "FaceNet & MTCNN", "3D Mesh Processing"])
-        if "Red Panda Games (Generative AI Diffusion Pipelines)" not in projects:
-            projects.append("Red Panda Games (Generative AI Diffusion Pipelines)")
-        projects.append("Face Recognition System")
+        rp_exp = has_experience_matching(("red panda", "diffusion", "mesh"))
+        if rp_exp:
+            skills.extend(["Diffusion Models (Flux, SD1.5, ControlNet)", "3D Mesh Processing"])
+            proj_title = f"{rp_exp.get('organization', 'Red Panda Games')} (Generative AI Diffusion Pipelines)"
+            if proj_title not in projects:
+                projects.append(proj_title)
+        cv_proj = has_project_matching(("face", "vision", "image"))
+        if cv_proj:
+            projects.append(cv_proj.get("name", ""))
+            skills.append("Computer Vision")
 
     # Check NLP
     if any(any(k in a for k in ("nlp", "language", "embedding", "text")) for a in areas_lower):
-        skills.extend(["DeBERTa-v3 Embeddings", "Sequence Modeling (RNN/LSTM/GRU)", "NLP Feature Engineering"])
-        projects.append("E-Commerce Price Prediction (NLP Embeddings)")
-        projects.append("IISER Bhopal (Sequence Models for Text Classification)")
+        ecom_proj = has_project_matching(("price prediction", "deberta", "nlp"))
+        if ecom_proj:
+            projects.append(ecom_proj.get("name", "E-Commerce Price Prediction (NLP Embeddings)"))
+            skills.extend(["DeBERTa-v3 Embeddings", "NLP Feature Engineering"])
+        char_proj = has_project_matching(("character", "backstory", "nli"))
+        if char_proj:
+            projects.append(char_proj.get("name", ""))
+        iiser_exp = has_experience_matching(("iiser", "computational linguistics", "pos tagging"))
+        if iiser_exp:
+            projects.append(f"{iiser_exp.get('organization', 'IISER Bhopal')} (Sequence Models for Text Classification)")
+            skills.append("Sequence Modeling (RNN/LSTM/GRU)")
 
     # Check Infrastructure & Serving / Evaluation
     if any(any(k in a for k in ("infrastructure", "serving", "evaluation", "latency", "gpu")) for a in areas_lower):
-        skills.extend(["GPU Inference Optimization", "Memory Offloading", "Celery & Redis Microservices", "LangSmith Auditing"])
-        if "Red Panda Games (Generative AI Diffusion Pipelines)" not in projects:
-            projects.append("Red Panda Games (GPU Inference Optimization)")
-        if "ControlPlane.ai (AI Governance & RAG Middleware)" not in projects:
-            projects.append("ControlPlane.ai (Parallel Auditing & Evaluation)")
+        rp_exp = has_experience_matching(("red panda", "gpu", "celery", "redis"))
+        if rp_exp:
+            skills.extend(["GPU Inference Optimization", "Memory Offloading", "Celery & Redis Microservices"])
+            proj_title = f"{rp_exp.get('organization', 'Red Panda Games')} (GPU Inference Optimization)"
+            if proj_title not in projects:
+                projects.append(proj_title)
+        cp_proj = has_project_matching(("controlplane", "langsmith", "auditing"))
+        if cp_proj:
+            skills.append("LangSmith Auditing")
+            proj_title = f"{cp_proj.get('name', 'ControlPlane.ai')} (Parallel Auditing & Evaluation)"
+            if proj_title not in projects:
+                projects.append(proj_title)
 
     # Check ML / Predictive Analytics / Data Science
     if any(any(k in a for k in ("predictive", "machine learning", "data science", "analytics")) for a in areas_lower):
-        skills.extend(["XGBoost", "Scikit-learn", "MLflow & DagsHub", "Docker CI/CD"])
-        projects.append("Network Security System (Automated ETL & Classification)")
+        sec_proj = has_project_matching(("security", "phishing", "etl"))
+        if sec_proj:
+            projects.append(sec_proj.get("name", "Network Security System (Automated ETL & Classification)"))
+            skills.extend(["XGBoost", "Scikit-learn", "MLflow & DagsHub", "Docker CI/CD"])
+        prof_proj = has_project_matching(("profitability", "lightgbm"))
+        if prof_proj:
+            projects.append(prof_proj.get("name", ""))
 
-    # Fallback to general AI/ML foundation if empty
-    if not skills:
-        skills = ["Applied AI/ML", "Generative AI", "RAG Architectures", "Python"]
-        projects = ["ControlPlane.ai", "Red Panda Games Internship"]
-
-    return list(dict.fromkeys(skills)), list(dict.fromkeys(projects))
+    return list(dict.fromkeys(skills)), list(dict.fromkeys([p for p in projects if p]))
 
 
 # ---------------------------------------------------------------------------
@@ -566,11 +636,11 @@ def draft_outreach_email(
     matched_skills, matched_projects = _determine_cv_connections(matched_areas, profile, cv_text)
 
     if generation_status == GenerationStatus.DRAFT_GENERATED.value:
-        personalization_explanation = (
-            f"Personalized for {clean_company or 'the company'} based on verified focus in {', '.join(matched_areas)}. "
-            f"Connected to candidate's background in generative AI pipelines (Red Panda Games) and context-aware RAG middleware (ControlPlane.ai). "
-            f"Addressed to {contact_name or 'the hiring team'}."
-        )
+        explanation_parts = [f"Personalized for {clean_company or 'the company'} based on verified focus in {', '.join(matched_areas)}."]
+        if matched_projects:
+            explanation_parts.append(f"Connected to candidate's background in {', '.join(matched_projects)}.")
+        explanation_parts.append(f"Addressed to {contact_name or 'the hiring team'}.")
+        personalization_explanation = " ".join(explanation_parts)
     elif generation_status == GenerationStatus.NEEDS_REVIEW.value:
         flags_text = "; ".join(review_flags) if review_flags else "Company or recipient evidence requires review"
         personalization_explanation = (

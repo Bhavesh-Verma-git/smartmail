@@ -243,7 +243,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 "errors": errors_data,
             })
         except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+            app.logger.warning("CSV preview error: %s", exc)
+            return jsonify({"success": False, "error": "Failed to parse CSV preview. Please verify file format."}), 500
         finally:
             try:
                 os.remove(tmp_path)
@@ -294,7 +295,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 "field_descriptions": FIELD_DESCRIPTIONS,
             })
         except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
+            try:
+                if saved_path.exists():
+                    saved_path.unlink()
+            except Exception:
+                pass
+            app.logger.warning("Spreadsheet inspection failed: %s", exc)
+            return jsonify({"success": False, "error": "Failed to inspect spreadsheet file. Ensure the file is not corrupted."}), 400
 
     # -----------------------------------------------------------------------
     # Stage 2: Pre-Flight Column Mapping & Validation Preview
@@ -367,7 +374,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 ],
             })
         except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 400
+            app.logger.warning("Spreadsheet preview mapping failed: %s", exc)
+            return jsonify({"success": False, "error": "Failed to preview contact mapping."}), 400
 
     # -----------------------------------------------------------------------
     # Stage 2: Download Validation CSV Report
@@ -411,7 +419,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 headers={"Content-Disposition": f"attachment; filename=validation_report_{file_token[:8]}.csv"},
             )
         except Exception as exc:
-            return Response(f"Validation error: {exc}", status=400)
+            app.logger.warning("Download validation report failed: %s", exc)
+            return Response("Failed to generate validation report.", status=400)
 
     # -----------------------------------------------------------------------
     # Route: Process Batch Run
@@ -592,7 +601,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             return redirect(url_for("view_batch_result", batch_id=batch_id))
 
         except Exception as exc:
-            flash(f"Batch processing error: {exc}", "danger")
+            app.logger.warning("Batch processing error: %s", exc)
+            flash("An error occurred during batch processing. Please review inputs and try again.", "danger")
             return redirect(url_for("import_contacts_page"))
 
     # -----------------------------------------------------------------------
@@ -716,10 +726,12 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                 recipient=recipient,
                 recipient_name=recipient_name,
                 reset_approval=True,  # Safeguard: editing resets approval!
+                send_log=_get_send_log(),
             )
             flash("Draft updated. Approval status reset to enforce re-review.", "info")
         except Exception as exc:
-            flash(f"Error saving draft edits: {exc}", "danger")
+            app.logger.warning("Error saving draft edits: %s", exc)
+            flash("An error occurred while saving draft edits. Please try again.", "danger")
 
         return redirect(url_for("view_draft", draft_id=draft_id))
 
@@ -729,7 +741,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             approve_draft(draft_id=draft_id, send_log=_get_send_log())
             flash(f"Draft {draft_id} explicitly approved for sending.", "success")
         except Exception as exc:
-            flash(f"Error approving draft: {exc}", "danger")
+            app.logger.warning("Error approving draft: %s", exc)
+            flash("An error occurred while approving the draft. Please try again.", "danger")
 
         return redirect(url_for("view_draft", draft_id=draft_id))
 
@@ -740,7 +753,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             reject_draft(draft_id=draft_id, reason=reason)
             flash(f"Draft {draft_id} rejected and placed on hold.", "warning")
         except Exception as exc:
-            flash(f"Error rejecting draft: {exc}", "danger")
+            app.logger.warning("Error rejecting draft: %s", exc)
+            flash("An error occurred while rejecting the draft. Please try again.", "danger")
 
         return redirect(url_for("view_draft", draft_id=draft_id))
 
@@ -798,7 +812,21 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             if draft_file.exists():
                 _atomic_write_json(draft_file, draft)
             flash(f"Send outcome uncertain ({send_res.error}): {send_res.message}", "warning")
-        elif send_res.error == "PROVIDER_ERROR":
+        elif send_res.error in ("PROVIDER_ERROR", "NETWORK_ERROR", "TIMEOUT") or (not send_res.success and send_res.error not in (
+            "APPROVAL_REQUIRED",
+            "DUPLICATE_RECIPIENT",
+            "ALREADY_SENT",
+            "LIVE_SENDING_DISABLED",
+            "GMAIL_NOT_CONFIGURED",
+            "INVALID_RECIPIENT",
+            "EMPTY_SUBJECT",
+            "EMPTY_BODY",
+            "MISSING_ATTACHMENT",
+            "ATTACHMENT_NOT_FOUND",
+            "INVALID_ATTACHMENT",
+            "SEND_IN_PROGRESS",
+            "CONTENTION_ERROR",
+        )):
             draft["status"] = DraftStatus.FAILED.value
             if draft_file.exists():
                 _atomic_write_json(draft_file, draft)
@@ -849,9 +877,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             flash(f"Successfully registered CV: {meta['filename']} ({meta['size_formatted']})", "success")
             return redirect(url_for("import_contacts_page"))
         except Exception as exc:
+            app.logger.warning("CV upload validation error: %s", exc)
             if is_ajax:
-                return jsonify({"success": False, "error": str(exc)}), 400
-            flash(f"CV validation error: {exc}", "danger")
+                return jsonify({"success": False, "error": "CV validation failed. Please upload a valid PDF up to 10 MB."}), 400
+            flash("CV validation failed. Please upload a valid PDF up to 10 MB.", "danger")
             return redirect(url_for("import_contacts_page"))
 
     @app.route("/cv/clear", methods=["POST"])

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS send_log (
     draft_id        TEXT    NOT NULL,
     recipient       TEXT    NOT NULL,
     campaign_id     TEXT    NOT NULL DEFAULT '',
-    status          TEXT    NOT NULL,       -- DRAFT | APPROVED | SUCCESS | FAILED | UNCERTAIN
+    status          TEXT    NOT NULL,       -- DRAFT | APPROVED | SUCCESS | FAILED | UNCERTAIN | SENDING
     created_at      TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL
 );
@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS send_log (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_recipient_campaign
     ON send_log (recipient, campaign_id)
     WHERE status = 'SUCCESS';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_recipient_campaign_sending
+    ON send_log (recipient, campaign_id)
+    WHERE status = 'SENDING';
 
 CREATE INDEX IF NOT EXISTS idx_recipient ON send_log (recipient);
 CREATE INDEX IF NOT EXISTS idx_draft_id  ON send_log (draft_id);
@@ -59,7 +63,7 @@ def _now_iso() -> str:
 
 class SendLog:
     """
-    Thread-safe, SQLite-backed registry of outreach send attempts.
+    Thread-safe and cross-instance, SQLite-backed registry of outreach send attempts.
 
     Parameters
     ----------
@@ -76,7 +80,7 @@ class SendLog:
         # lifetime of this instance.
         self._shared_conn: sqlite3.Connection | None = None
         if self._db_path == ":memory:":
-            self._shared_conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._shared_conn = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
             self._shared_conn.row_factory = sqlite3.Row
             self._shared_conn.execute("PRAGMA foreign_keys=ON;")
         self._init_db()
@@ -93,23 +97,63 @@ class SendLog:
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
         if self._shared_conn is not None:
             # In-memory mode: reuse the single persistent connection.
-            # No close() — connection lives for the lifetime of the instance.
             try:
                 yield self._shared_conn
-                self._shared_conn.commit()
             except Exception:
-                self._shared_conn.rollback()
                 raise
         else:
-            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            conn = sqlite3.connect(self._db_path, timeout=15.0, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("PRAGMA busy_timeout=15000;")
             try:
                 yield conn
                 conn.commit()
             except Exception:
                 conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    @contextmanager
+    def _immediate_conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """
+        Acquires an immediate write transaction (BEGIN IMMEDIATE) on an autocommit connection.
+        Ensures cross-instance, cross-connection, and multi-thread serialization at the SQLite lock level.
+        """
+        if self._shared_conn is not None:
+            with self._lock:
+                self._shared_conn.execute("BEGIN IMMEDIATE;")
+                try:
+                    yield self._shared_conn
+                    self._shared_conn.execute("COMMIT;")
+                except Exception:
+                    try:
+                        self._shared_conn.execute("ROLLBACK;")
+                    except Exception:
+                        pass
+                    raise
+        else:
+            conn = sqlite3.connect(
+                self._db_path,
+                timeout=15.0,
+                check_same_thread=False,
+                isolation_level=None,  # Manual transaction management with explicit BEGIN IMMEDIATE
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
+            conn.execute("PRAGMA busy_timeout=15000;")
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                yield conn
+                conn.execute("COMMIT;")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK;")
+                except Exception:
+                    pass
                 raise
             finally:
                 conn.close()
@@ -153,15 +197,16 @@ class SendLog:
         dry_run: bool = True,
     ) -> tuple[bool, str]:
         """
-        Atomically reserve a draft and recipient for sending.
+        Atomically reserve a draft and recipient for sending across independent
+        SQLite connections, instances, and worker threads.
         Prevents concurrent requests from dispatching the same recipient/campaign.
         Returns (True, "CLAIMED") on success, or (False, reason) if blocked.
         """
         now = _now_iso()
         recipient_norm = recipient.strip().lower()
 
-        with self._lock:
-            with self._connect() as conn:
+        try:
+            with self._immediate_conn() as conn:
                 # 1. Duplicate check: Confirmed live send exists
                 row_success = conn.execute(
                     """
@@ -199,7 +244,7 @@ class SendLog:
                 if row_unc:
                     return False, "UNCERTAIN_SEND"
 
-                # 4. Check for active concurrent in-flight claim
+                # 4. Check for active concurrent in-flight claim for this recipient/campaign
                 row_sending = conn.execute(
                     """
                     SELECT id, draft_id FROM send_log
@@ -211,11 +256,21 @@ class SendLog:
                 if row_sending:
                     return False, "SEND_IN_PROGRESS"
 
-                # 5. Acquire reservation/claim
+                # 5. Check if THIS draft already has an in-flight or terminal status
                 row_draft = conn.execute(
-                    "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
+                    "SELECT id, status FROM send_log WHERE draft_id = ? LIMIT 1", (draft_id,)
                 ).fetchone()
                 if row_draft:
+                    d_status = row_draft["status"]
+                    if d_status == STATUS_SENDING:
+                        return False, "SEND_IN_PROGRESS"
+                    if d_status == STATUS_SUCCESS:
+                        return False, "ALREADY_SENT"
+                    if d_status == STATUS_UNCERTAIN:
+                        return False, "UNCERTAIN_SEND"
+                    if dry_run and d_status == STATUS_SIMULATED:
+                        return False, "ALREADY_SENT"
+
                     conn.execute(
                         "UPDATE send_log SET status = ?, recipient = ?, campaign_id = ?, updated_at = ? WHERE draft_id = ?",
                         (STATUS_SENDING, recipient_norm, campaign_id, now, draft_id),
@@ -230,20 +285,28 @@ class SendLog:
                         (draft_id, recipient_norm, campaign_id, STATUS_SENDING, now, now),
                     )
                 return True, "CLAIMED"
+        except sqlite3.IntegrityError:
+            # Caught DB-level unique constraint violation (e.g. uq_recipient_campaign_sending)
+            return False, "SEND_IN_PROGRESS"
+        except sqlite3.OperationalError:
+            # Contention / lock busy timeout
+            return False, "CONTENTION_ERROR"
 
     def release_claim(
         self,
         draft_id: str,
         status: str = STATUS_APPROVED,
     ) -> None:
-        """Release an in-flight send reservation back to approved (or draft)."""
+        """Release an in-flight send reservation back to approved (or draft/failed)."""
         now = _now_iso()
-        with self._lock:
-            with self._connect() as conn:
+        try:
+            with self._immediate_conn() as conn:
                 conn.execute(
                     "UPDATE send_log SET status = ?, updated_at = ? WHERE draft_id = ? AND status = ?",
                     (status, now, draft_id, STATUS_SENDING),
                 )
+        except Exception:
+            pass
 
     def _upsert(
         self,
@@ -254,32 +317,31 @@ class SendLog:
     ) -> None:
         now = _now_iso()
         recipient_norm = recipient.strip().lower()
-        with self._lock:
-            with self._connect() as conn:
-                # Check if row already exists for this draft_id
-                row = conn.execute(
-                    "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
-                ).fetchone()
-                if row:
-                    if campaign_id:
-                        conn.execute(
-                            "UPDATE send_log SET status=?, recipient=?, updated_at=?, campaign_id=? WHERE draft_id=?",
-                            (status, recipient_norm, now, campaign_id, draft_id),
-                        )
-                    else:
-                        conn.execute(
-                            "UPDATE send_log SET status=?, recipient=?, updated_at=? WHERE draft_id=?",
-                            (status, recipient_norm, now, draft_id),
-                        )
+        with self._immediate_conn() as conn:
+            # Check if row already exists for this draft_id
+            row = conn.execute(
+                "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
+            ).fetchone()
+            if row:
+                if campaign_id:
+                    conn.execute(
+                        "UPDATE send_log SET status=?, recipient=?, updated_at=?, campaign_id=? WHERE draft_id=?",
+                        (status, recipient_norm, now, campaign_id, draft_id),
+                    )
                 else:
                     conn.execute(
-                        """
-                        INSERT INTO send_log
-                            (draft_id, recipient, campaign_id, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (draft_id, recipient_norm, campaign_id, status, now, now),
+                        "UPDATE send_log SET status=?, recipient=?, updated_at=? WHERE draft_id=?",
+                        (status, recipient_norm, now, draft_id),
                     )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO send_log
+                        (draft_id, recipient, campaign_id, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (draft_id, recipient_norm, campaign_id, status, now, now),
+                )
 
     # ------------------------------------------------------------------
     # Read operations

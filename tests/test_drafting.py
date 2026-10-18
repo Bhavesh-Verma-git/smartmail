@@ -772,3 +772,85 @@ class TestTruthfulContentAndAdversarialDrafting:
         assert draft.review_required is True
         assert any("technical relevance unverified" in f.lower() for f in draft.review_flags)
 
+    def test_irrelevant_technical_areas_produce_no_false_project_claims(self):
+        """Unrelated technical areas do not trigger claims about ControlPlane.ai, Red Panda, NLP, or Vision."""
+        pipe = _make_pipeline_result(matched_areas=["Commercial Real Estate", "Agricultural Fertilizer"])
+        draft = draft_outreach_email(
+            profile=PROFILE,
+            recipient_email="lead@farmco.example",
+            company_name="FarmCo",
+            contact_name="Director",
+            target_role="AI/ML Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        assert len(draft.matched_projects) == 0
+        assert len(draft.matched_skills) == 0
+        assert "ControlPlane.ai" not in draft.body
+        assert "Red Panda Games" not in draft.body
+        assert "diffusion models" not in draft.body
+        assert "ControlPlane.ai" not in draft.personalization_explanation
+        assert "Red Panda Games" not in draft.personalization_explanation
+
+    def test_candidate_profile_without_specific_experience_omits_claims(self):
+        """If profile lacks Red Panda Games or ControlPlane, drafting never invents them even if company matches GenAI."""
+        profile_no_exp = {
+            "personal_info": {"full_name": "Test Candidate", "email": "tc@example.com"},
+            "education": [{"institution": "Test University"}],
+            "experience": [],
+            "projects": [],
+            "preferences": {"availability_duration_months": "3 months"},
+        }
+        pipe = _make_pipeline_result(matched_areas=["Generative AI", "RAG Architectures"])
+        draft = draft_outreach_email(
+            profile=profile_no_exp,
+            recipient_email="hr@genai.example",
+            company_name="GenAI Labs",
+            contact_name="Jane",
+            target_role="AI Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        assert "Red Panda Games" not in draft.body
+        assert "ControlPlane.ai" not in draft.body
+        assert "diffusion models" not in draft.body
+        assert "Red Panda Games" not in draft.personalization_explanation
+        assert "ControlPlane.ai" not in draft.personalization_explanation
+
+    def test_narrowly_matched_ml_area_omits_genai_and_diffusion(self):
+        """Company focused strictly on Predictive ML does not receive GenAI, Red Panda, or diffusion claims."""
+        profile_with_ml = {
+            "personal_info": {"full_name": "Bhavesh Verma", "email": "bv@example.com"},
+            "education": [{"institution": "IIT Kharagpur"}],
+            "experience": [
+                {
+                    "organization": "Red Panda Games",
+                    "responsibilities": ["Developed diffusion pipelines."],
+                }
+            ],
+            "projects": [
+                {
+                    "name": "Network Security System (Automated ETL & Classification)",
+                    "technologies": ["scikit-learn", "XGBoost", "Docker"],
+                    "short_description": "ETL and classification system",
+                }
+            ],
+            "preferences": {"availability_duration_months": "3-6 months"},
+        }
+        pipe = _make_pipeline_result(matched_areas=["Machine Learning", "Predictive Analytics"])
+        draft = draft_outreach_email(
+            profile=profile_with_ml,
+            recipient_email="recruiter@analytics.example",
+            company_name="Predictive Corp",
+            contact_name="Bob",
+            target_role="Data Science Intern",
+            verification_pipeline_result=pipe,
+            mode=WorkflowMode.UPLOADED_CV,
+        )
+        assert "Red Panda Games" not in draft.body
+        assert "diffusion models" not in draft.body
+        assert "ControlPlane.ai" not in draft.body
+        assert "Red Panda Games" not in draft.personalization_explanation
+        assert "ControlPlane.ai" not in draft.personalization_explanation
+        assert "Network Security System" in draft.matched_projects[0]
+

@@ -771,7 +771,11 @@ class TestUploadedCVIntegrity:
 class TestApprovalAndSendSafeguards:
     def _setup(self, tmp_path: Path):
         dummy_cv = tmp_path / "cv.pdf"
-        dummy_cv.write_bytes(b"%PDF-1.4 dummy")
+        import pypdf
+        _w = pypdf.PdfWriter()
+        _w.add_blank_page(width=72, height=72)
+        with open(dummy_cv, "wb") as _f:
+            _w.write(_f)
         wf = OutreachWorkflow(
             profile_path=_PROFILE_PATH,
             default_mode=WorkflowMode.UPLOADED_CV,

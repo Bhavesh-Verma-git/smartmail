@@ -43,7 +43,11 @@ def client(tmp_path: Path, test_send_log: SendLog) -> Generator[FlaskClient, Non
     """Fixture providing a configured Flask test client."""
     # Ensure reference CV exists for uploaded CV mode
     dummy_cv = tmp_path / "candidate_cv.pdf"
-    dummy_cv.write_bytes(b"%PDF-1.4 test candidate cv content")
+    import pypdf
+    _w = pypdf.PdfWriter()
+    _w.add_blank_page(width=72, height=72)
+    with open(dummy_cv, "wb") as _f:
+        _w.write(_f)
     register_uploaded_cv(dummy_cv)
 
     app = create_app({
@@ -664,6 +668,238 @@ def test_cv_streaming_size_limit_rejection():
     res = validate_cv_stream(stream, "large.pdf", max_size_bytes=10 * 1024 * 1024)
     assert not res.is_valid
     assert "exceeds" in res.error.lower()
+
+
+def test_csrf_rejection_across_state_changing_routes(tmp_path: Path, test_send_log: SendLog):
+    """
+    Verify that missing or invalid CSRF tokens are rejected with HTTP 400 across
+    every class of state-changing route.
+    """
+    app = create_app({
+        "TESTING": True,
+        "SEND_LOG_PATH": str(test_send_log._db_path),
+        "WTF_CSRF_ENABLED": True,
+        "SECRET_KEY": "csrf-security-audit-key",
+    })
+
+    routes = [
+        ("/cv/clear", "POST", {}),
+        ("/cv/test-tailor", "POST", {"target_company": "Acme AI"}),
+        ("/drafts/sample-draft/approve", "POST", {}),
+        ("/drafts/sample-draft/reject", "POST", {}),
+        ("/drafts/sample-draft/send", "POST", {}),
+        ("/contacts/preview", "POST", {"file_token": "token123"}),
+        ("/contacts/download-report", "POST", {"file_token": "token123"}),
+    ]
+
+    with app.test_client() as c:
+        # Establish session
+        c.get("/")
+        with c.session_transaction() as sess:
+            valid_token = sess["csrf_token"]
+
+        for route, method, payload in routes:
+            # 1. Missing CSRF token -> must reject with 400
+            res_missing = c.post(route, data=payload)
+            assert res_missing.status_code == 400, f"Route {route} did not reject missing CSRF token"
+            assert "CSRF validation failed" in res_missing.data.decode("utf-8")
+
+            # 2. Invalid CSRF token header -> must reject with 400
+            res_invalid = c.post(route, data=payload, headers={"X-CSRFToken": "invalid-token-xyz"})
+            assert res_invalid.status_code == 400, f"Route {route} did not reject invalid CSRF token"
+            assert "CSRF validation failed" in res_invalid.data.decode("utf-8")
+
+            # 3. Valid CSRF token in header -> passes CSRF layer (does not return CSRF 400)
+            res_valid = c.post(route, data=payload, headers={"X-CSRFToken": valid_token})
+            assert res_valid.status_code != 400 or "CSRF validation failed" not in res_valid.data.decode("utf-8"), \
+                f"Route {route} rejected valid CSRF token"
+
+
+def test_failed_spreadsheet_inspection_cleans_up_saved_file(tmp_path: Path, test_send_log: SendLog, monkeypatch):
+    """
+    Prove that if spreadsheet inspection fails, any uploaded file saved to
+    output/batches_input/ is removed and not orphaned on disk.
+    """
+    app = create_app({
+        "TESTING": True,
+        "SEND_LOG_PATH": str(test_send_log._db_path),
+        "WTF_CSRF_ENABLED": False,
+    })
+
+    batches_dir = Path("output/batches_input")
+    batches_dir.mkdir(parents=True, exist_ok=True)
+    initial_files = set(batches_dir.iterdir())
+
+    # Simulate inspection exception
+    def broken_inspect(path, sheet_name=None):
+        raise ValueError("Corrupted workbook headers")
+
+    monkeypatch.setattr("src.ui.app.inspect_spreadsheet", broken_inspect)
+
+    with app.test_client() as c:
+        fake_file = (io.BytesIO(b"not a valid sheet content"), "corrupted.xlsx")
+        res = c.post("/contacts/inspect", data={"contacts_file": fake_file}, content_type="multipart/form-data")
+        assert res.status_code == 400
+        json_data = res.get_json()
+        assert json_data["success"] is False
+        assert "Ensure the file is not corrupted" in json_data["error"]
+
+    # Verify no new files were left behind in output/batches_input
+    current_files = set(batches_dir.iterdir())
+    new_files = current_files - initial_files
+    assert len(new_files) == 0, f"Orphaned temporary files left behind: {new_files}"
+
+
+def test_dispatch_state_consistency_across_outcomes(tmp_path: Path, test_send_log: SendLog):
+    """
+    Verify complete synchronization between UI draft JSON and SQLite send-log across:
+    - Simulated send
+    - Mock live provider send in isolated test
+    - Hard provider error
+    - Uncertain outcome
+    - Edit invalidation
+    """
+    import pypdf
+    # 1. Create a genuine 1-page PDF
+    valid_pdf = tmp_path / "dispatch_valid.pdf"
+    w = pypdf.PdfWriter()
+    w.add_blank_page(width=72, height=72)
+    with open(valid_pdf, "wb") as f:
+        w.write(f)
+
+    # 2. Mock sending provider with configurable behavior
+    class ControllableProvider:
+        def __init__(self):
+            self.mode = "success"
+            self.sent = []
+
+        def send_email(self, recipient, subject, body, attachment_path):
+            if self.mode == "fail":
+                raise RuntimeError("SMTP connection dropped unexpectedly")
+            if self.mode == "timeout":
+                raise RuntimeError("Gateway timeout waiting for server response")
+            self.sent.append(recipient)
+
+    mock_prov = ControllableProvider()
+
+    app = create_app({
+        "TESTING": True,
+        "SEND_LOG_PATH": str(test_send_log._db_path),
+        "WTF_CSRF_ENABLED": False,
+        "DRY_RUN": True,
+        "EMAIL_SENDER_PROVIDER": mock_prov,
+    })
+
+    # Setup draft
+    draft_id = "draft-sync-audit"
+    draft = EmailDraft(
+        draft_id=draft_id,
+        recipient="sync-audit@example.com",
+        recipient_name="Auditor",
+        company_name="AuditCorp",
+        subject="Audit Subject",
+        body="Audit Body",
+        attachment_path=str(valid_pdf),
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+    )
+    save_draft_record(draft, campaign_id="sync-camp")
+    test_send_log.record_draft(draft_id, "sync-audit@example.com", "sync-camp")
+
+    with app.test_client() as c:
+        # A. Unapproved send attempt is blocked
+        res_unapproved = c.post(f"/drafts/{draft_id}/send", follow_redirects=True)
+        assert res_unapproved.status_code == 200
+        assert get_draft(draft_id)["status"] == "DRAFT"
+        assert test_send_log.get_status(draft_id) in ("DRAFT", None)
+
+        # B. Approve draft
+        c.post(f"/drafts/{draft_id}/approve", follow_redirects=True)
+        assert get_draft(draft_id)["status"] == "APPROVED"
+        assert test_send_log.get_status(draft_id) == "APPROVED"
+
+        # C. Simulated send (dry_run=True)
+        c.post(f"/drafts/{draft_id}/send", follow_redirects=True)
+        assert get_draft(draft_id)["status"] == "SIMULATED_SENT"
+        assert test_send_log.get_status(draft_id) == "SIMULATED"
+        assert test_send_log.was_simulated("sync-audit@example.com", "sync-camp")
+        assert not test_send_log.was_successfully_sent("sync-audit@example.com", "sync-camp")
+
+        # D. Edit draft -> must reset approval in BOTH draft JSON and SQLite send-log
+        c.post(
+            f"/drafts/{draft_id}/edit",
+            data={"subject": "Revised Audit Subject", "body": "Revised Body"},
+            follow_redirects=True,
+        )
+        assert get_draft(draft_id)["status"] == "DRAFT"
+        assert get_draft(draft_id)["approved"] is False
+        assert test_send_log.get_status(draft_id) == "DRAFT"
+
+        # E. Live mock provider send in isolated test (DRY_RUN=False)
+        app.config["DRY_RUN"] = False
+        # Re-approve
+        c.post(f"/drafts/{draft_id}/approve", follow_redirects=True)
+        assert get_draft(draft_id)["status"] == "APPROVED"
+        assert test_send_log.get_status(draft_id) == "APPROVED"
+
+        # Send live with mock provider
+        c.post(f"/drafts/{draft_id}/send", follow_redirects=True)
+        assert get_draft(draft_id)["status"] == "SENT"
+        assert test_send_log.get_status(draft_id) == "SUCCESS"
+        assert test_send_log.was_successfully_sent("sync-audit@example.com", "sync-camp")
+        assert len(mock_prov.sent) == 1
+
+        # F. Re-dispatch already-sent recipient -> blocked as DUPLICATE_RECIPIENT
+        res_dup = c.post(f"/drafts/{draft_id}/send", follow_redirects=True)
+        assert "already been sent" in res_dup.data.decode("utf-8")
+
+        # G. Hard provider error on new draft
+        d_fail_id = "draft-fail-test"
+        d_fail = EmailDraft(
+            draft_id=d_fail_id,
+            recipient="fail-target@example.com",
+            recipient_name="Fail Target",
+            company_name="FailCorp",
+            subject="Fail Test",
+            body="Fail Body",
+            attachment_path=str(valid_pdf),
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+        )
+        save_draft_record(d_fail, campaign_id="sync-camp")
+        test_send_log.record_draft(d_fail_id, "fail-target@example.com", "sync-camp")
+
+        c.post(f"/drafts/{d_fail_id}/approve", follow_redirects=True)
+        mock_prov.mode = "fail"
+        c.post(f"/drafts/{d_fail_id}/send", follow_redirects=True)
+        assert get_draft(d_fail_id)["status"] == "FAILED"
+        assert test_send_log.get_status(d_fail_id) == "FAILED"
+
+        # H. Uncertain outcome on new draft
+        d_unc_id = "draft-unc-test"
+        d_unc = EmailDraft(
+            draft_id=d_unc_id,
+            recipient="unc-target@example.com",
+            recipient_name="Unc Target",
+            company_name="UncCorp",
+            subject="Unc Test",
+            body="Unc Body",
+            attachment_path=str(valid_pdf),
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+        )
+        save_draft_record(d_unc, campaign_id="sync-camp")
+        test_send_log.record_draft(d_unc_id, "unc-target@example.com", "sync-camp")
+
+        c.post(f"/drafts/{d_unc_id}/approve", follow_redirects=True)
+        mock_prov.mode = "timeout"
+        c.post(f"/drafts/{d_unc_id}/send", follow_redirects=True)
+        assert get_draft(d_unc_id)["status"] == "UNCERTAIN"
+        assert test_send_log.get_status(d_unc_id) == "UNCERTAIN"
+        assert test_send_log.has_uncertain_send("unc-target@example.com", "sync-camp")
 
 
 

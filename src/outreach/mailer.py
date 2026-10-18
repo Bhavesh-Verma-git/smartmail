@@ -196,6 +196,72 @@ class EmailSender:
                 message=f"Send blocked: Specified attachment file does not exist on disk: {draft.attachment_path}",
                 error="ATTACHMENT_NOT_FOUND",
             )
+        if not att_path.is_file():
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: Specified attachment is not a regular file: {draft.attachment_path}",
+                error="INVALID_ATTACHMENT",
+            )
+        if att_path.suffix.lower() != ".pdf":
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: Attachment must be a PDF file (.pdf extension required): {draft.attachment_path}",
+                error="INVALID_ATTACHMENT",
+            )
+
+        # Verify readability and PDF magic header
+        try:
+            with open(att_path, "rb") as f:
+                header = f.read(5)
+                if header != b"%PDF-":
+                    return SendResult(
+                        success=False,
+                        draft_id=draft_id,
+                        recipient=draft.recipient,
+                        message=f"Send blocked: Attachment is not a valid PDF (missing %PDF- header): {draft.attachment_path}",
+                        error="INVALID_ATTACHMENT",
+                    )
+        except (OSError, PermissionError) as err:
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: Attachment file is unreadable: {err}",
+                error="INVALID_ATTACHMENT",
+            )
+
+        # Verify parseable PDF structure and page count
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(str(att_path))
+            if len(reader.pages) == 0:
+                return SendResult(
+                    success=False,
+                    draft_id=draft_id,
+                    recipient=draft.recipient,
+                    message="Send blocked: Attachment PDF contains no pages.",
+                    error="INVALID_ATTACHMENT",
+                )
+            if reader.is_encrypted:
+                return SendResult(
+                    success=False,
+                    draft_id=draft_id,
+                    recipient=draft.recipient,
+                    message="Send blocked: Attachment PDF is encrypted.",
+                    error="INVALID_ATTACHMENT",
+                )
+        except Exception as err:
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: Attachment is corrupted or not a parseable PDF: {err}",
+                error="INVALID_ATTACHMENT",
+            )
 
         # Safeguard 2: Duplicate send prevention
         if self.review_manager.is_duplicate(draft.recipient):

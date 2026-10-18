@@ -452,8 +452,10 @@ class OutreachWorkflow:
         if not claimed:
             msg_map = {
                 "DUPLICATE_RECIPIENT": f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
+                "ALREADY_SENT": f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
                 "UNCERTAIN_SEND": f"Send blocked: A previous send to {draft.recipient} had an uncertain outcome. Manual reconciliation required before resending.",
                 "SEND_IN_PROGRESS": f"Send blocked: A send attempt to {draft.recipient} is currently in progress.",
+                "CONTENTION_ERROR": f"Send blocked: Database lock contention while attempting to reserve draft. Please retry.",
             }
             return SendResult(
                 success=False,
@@ -486,6 +488,7 @@ class OutreachWorkflow:
         elif result.error in (
             "APPROVAL_REQUIRED",
             "DUPLICATE_RECIPIENT",
+            "ALREADY_SENT",
             "LIVE_SENDING_DISABLED",
             "GMAIL_NOT_CONFIGURED",
             "INVALID_RECIPIENT",
@@ -493,7 +496,9 @@ class OutreachWorkflow:
             "EMPTY_BODY",
             "MISSING_ATTACHMENT",
             "ATTACHMENT_NOT_FOUND",
+            "INVALID_ATTACHMENT",
             "SEND_IN_PROGRESS",
+            "CONTENTION_ERROR",
         ):
             status_restore = "APPROVED" if draft.approved else "DRAFT"
             self.send_log.release_claim(draft_id=draft_id, status=status_restore)

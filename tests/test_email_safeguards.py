@@ -58,20 +58,16 @@ class MockBlockedResearchProvider:
         )
 
 
-@pytest.fixture(autouse=True)
-def ensure_test_attachment():
-    """Ensure a real temporary cv.pdf exists during tests so tests use real files on disk."""
-    test_cv = Path("cv.pdf")
-    created = False
-    if not test_cv.exists():
-        test_cv.write_bytes(b"%PDF-1.4 test dummy cv content")
-        created = True
-    yield
-    if created and test_cv.exists():
-        try:
-            test_cv.unlink()
-        except OSError:
-            pass
+@pytest.fixture
+def valid_pdf_file(tmp_path: Path) -> Path:
+    """Generate an isolated, valid 1-page PDF fixture for tests without root files."""
+    import pypdf
+    w = pypdf.PdfWriter()
+    w.add_blank_page(width=72, height=72)
+    p = tmp_path / "valid_cv.pdf"
+    with open(p, "wb") as f:
+        w.write(f)
+    return p
 
 
 class MockSendingProvider:
@@ -168,12 +164,12 @@ class TestDraftEditingAndReview:
 class TestSendingSafeguards:
     """Tests for explicit approval, duplicate prevention, and provider configuration."""
 
-    def test_send_blocked_without_explicit_approval(self, profile):
+    def test_send_blocked_without_explicit_approval(self, profile, valid_pdf_file):
         draft = draft_outreach_email(
             profile=profile,
             recipient_email="test@example.com",
             company_name="Test Corp",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft)
@@ -185,12 +181,12 @@ class TestSendingSafeguards:
         assert result.error == "APPROVAL_REQUIRED"
         assert "Explicit user approval is required" in result.message
 
-    def test_send_succeeds_with_explicit_approval_and_provider(self, profile):
+    def test_send_succeeds_with_explicit_approval_and_provider(self, profile, valid_pdf_file):
         draft = draft_outreach_email(
             profile=profile,
             recipient_email="test@example.com",
             company_name="Test Corp",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft)
@@ -209,18 +205,18 @@ class TestSendingSafeguards:
         assert len(provider.sent_emails) == 1
         assert provider.sent_emails[0]["recipient"] == "test@example.com"
 
-    def test_duplicate_send_is_strictly_blocked(self, profile):
+    def test_duplicate_send_is_strictly_blocked(self, profile, valid_pdf_file):
         draft1 = draft_outreach_email(
             profile=profile,
             recipient_email="candidate@target.example",
             company_name="Target Inc",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         draft2 = draft_outreach_email(
             profile=profile,
             recipient_email="candidate@target.example",  # Same recipient
             company_name="Target Inc",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft1)
@@ -242,12 +238,12 @@ class TestSendingSafeguards:
         # Provider should still only have 1 sent email
         assert len(provider.sent_emails) == 1
 
-    def test_edit_invalidates_approval_and_resend_is_duplicate(self, profile):
+    def test_edit_invalidates_approval_and_resend_is_duplicate(self, profile, valid_pdf_file):
         draft = draft_outreach_email(
             profile=profile,
             recipient_email="unique_test@target.example",
             company_name="Target Inc",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft)
@@ -285,7 +281,7 @@ class TestSendingSafeguards:
         assert res4.success is False
         assert res4.error == "DUPLICATE_RECIPIENT"
 
-    def test_missing_gmail_configuration_reported_honestly(self, profile, monkeypatch):
+    def test_missing_gmail_configuration_reported_honestly(self, profile, valid_pdf_file, monkeypatch):
         # Clear any environment variables
         monkeypatch.delenv("GMAIL_CREDENTIALS_PATH", raising=False)
         monkeypatch.delenv("GMAIL_TOKEN_PATH", raising=False)
@@ -294,7 +290,7 @@ class TestSendingSafeguards:
             profile=profile,
             recipient_email="hr@unconfigured.example",
             company_name="Unconfigured Corp",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft)
@@ -309,13 +305,13 @@ class TestSendingSafeguards:
         assert "Gmail integration is not configured" in result.message
         assert "GMAIL_CREDENTIALS_PATH" in result.message
 
-    def test_dry_run_prevents_network_transmission_even_with_provider_injected(self, profile):
+    def test_dry_run_prevents_network_transmission_even_with_provider_injected(self, profile, valid_pdf_file):
         """CRITICAL SAFEGUARD: dry_run=True must NEVER invoke network provider transmission."""
         draft = draft_outreach_email(
             profile=profile,
             recipient_email="safeguard@target.example",
             company_name="Safe Corp",
-            attachment_path="cv.pdf",
+            attachment_path=str(valid_pdf_file),
         )
         manager = EmailReviewManager()
         manager.register_draft(draft)
@@ -334,9 +330,14 @@ class TestSendingSafeguards:
         self, sample_contact, tmp_path
     ):
         from src.outreach.send_log import SendLog
+        import pypdf
 
         dummy_cv = tmp_path / "dummy_cv.pdf"
-        dummy_cv.write_bytes(b"%PDF-1.4 dummy content")
+        _w = pypdf.PdfWriter()
+        _w.add_blank_page(width=72, height=72)
+        with open(dummy_cv, "wb") as _f:
+            _w.write(_f)
+
         shared_db = tmp_path / "shared_sends.db"
         send_log = SendLog(db_path=shared_db)
 
@@ -377,9 +378,13 @@ class TestSendingSafeguards:
         self, sample_contact, tmp_path
     ):
         from src.outreach.send_log import SendLog
+        import pypdf
 
         dummy_cv = tmp_path / "dummy_cv.pdf"
-        dummy_cv.write_bytes(b"%PDF-1.4 dummy content")
+        _w = pypdf.PdfWriter()
+        _w.add_blank_page(width=72, height=72)
+        with open(dummy_cv, "wb") as _f:
+            _w.write(_f)
         shared_db = tmp_path / "shared_sends.db"
         send_log = SendLog(db_path=shared_db)
 
@@ -402,3 +407,119 @@ class TestSendingSafeguards:
         assert send_res.success is False
         assert send_res.error == "UNCERTAIN_SEND"
         assert "uncertain outcome" in send_res.message
+
+
+class TestAttachmentValidation:
+    """Comprehensive validation of attachment files per audit requirements."""
+
+    def test_missing_attachment_file_fails(self, profile, tmp_path):
+        missing_path = tmp_path / "does_not_exist.pdf"
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(missing_path),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        sender = EmailSender(review_manager=manager, provider=MockSendingProvider(), dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is False
+        assert res.error == "ATTACHMENT_NOT_FOUND"
+        assert "does not exist on disk" in res.message
+
+    def test_directory_as_attachment_fails(self, profile, tmp_path):
+        folder = tmp_path / "not_a_file.pdf"
+        folder.mkdir()
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(folder),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        sender = EmailSender(review_manager=manager, provider=MockSendingProvider(), dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is False
+        assert res.error == "INVALID_ATTACHMENT"
+        assert "not a regular file" in res.message
+
+    def test_non_pdf_extension_fails(self, profile, tmp_path):
+        txt_file = tmp_path / "cv.txt"
+        txt_file.write_text("plain text resume")
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(txt_file),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        sender = EmailSender(review_manager=manager, provider=MockSendingProvider(), dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is False
+        assert res.error == "INVALID_ATTACHMENT"
+        assert ".pdf extension required" in res.message
+
+    def test_corrupted_pdf_missing_magic_header_fails(self, profile, tmp_path):
+        bad_pdf = tmp_path / "bad.pdf"
+        bad_pdf.write_bytes(b"NOT A PDF AT ALL 123456789")
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(bad_pdf),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        sender = EmailSender(review_manager=manager, provider=MockSendingProvider(), dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is False
+        assert res.error == "INVALID_ATTACHMENT"
+        assert "missing %PDF- header" in res.message
+
+    def test_corrupted_pdf_truncated_content_fails(self, profile, tmp_path):
+        bad_pdf = tmp_path / "truncated.pdf"
+        bad_pdf.write_bytes(b"%PDF-1.4\nTRUNCATED_AND_BROKEN_CONTENT")
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(bad_pdf),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        sender = EmailSender(review_manager=manager, provider=MockSendingProvider(), dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is False
+        assert res.error == "INVALID_ATTACHMENT"
+        assert "not a parseable PDF" in res.message
+
+    def test_valid_pdf_succeeds(self, profile, valid_pdf_file):
+        draft = draft_outreach_email(
+            profile=profile,
+            recipient_email="test@example.com",
+            company_name="Test Corp",
+            attachment_path=str(valid_pdf_file),
+        )
+        manager = EmailReviewManager()
+        manager.register_draft(draft)
+        manager.approve_draft(draft.draft_id)
+        provider = MockSendingProvider()
+        sender = EmailSender(review_manager=manager, provider=provider, dry_run=False)
+
+        res = sender.send(draft.draft_id)
+        assert res.success is True
+        assert res.error is None
+        assert len(provider.sent_emails) == 1

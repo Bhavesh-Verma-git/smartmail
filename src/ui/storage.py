@@ -350,9 +350,11 @@ def update_draft(
     recipient: str | None = None,
     recipient_name: str | None = None,
     reset_approval: bool = True,
+    send_log: SendLog | None = None,
 ) -> dict[str, Any]:
     """
-    Update draft fields. Resets approval status to enforce re-review safeguard.
+    Update draft fields. Resets approval status in both draft JSON and SQLite send_log
+    to enforce re-review safeguard.
     """
     draft_data = get_draft(draft_id)
     if not draft_data:
@@ -370,9 +372,27 @@ def update_draft(
     if reset_approval:
         draft_data["approved"] = False
         draft_data["status"] = "DRAFT"
+        sl = send_log or SendLog()
+        sl.record_draft(
+            draft_id=draft_id,
+            recipient=draft_data.get("recipient", ""),
+            campaign_id=draft_data.get("campaign_id", ""),
+        )
 
     draft_data["updated_at"] = _now_iso()
 
+    file_path = _DRAFTS_DIR / f"{draft_id}.json"
+    _atomic_write_json(file_path, draft_data)
+    return draft_data
+
+
+def update_draft_status(draft_id: str, status: str) -> dict[str, Any]:
+    """Update draft status field safely and atomically."""
+    draft_data = get_draft(draft_id)
+    if not draft_data:
+        raise KeyError(f"Draft '{draft_id}' not found.")
+    draft_data["status"] = status
+    draft_data["updated_at"] = _now_iso()
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
     _atomic_write_json(file_path, draft_data)
     return draft_data
