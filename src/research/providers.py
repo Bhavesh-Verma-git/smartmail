@@ -41,6 +41,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from bs4 import BeautifulSoup
 
 from src.research.models import (
@@ -107,11 +109,23 @@ class HttpPageProvider(ResearchProvider):
         connection and the read phase.
     """
 
-    def __init__(self, timeout_seconds: int = 10) -> None:
-        self._timeout = timeout_seconds
+    def __init__(self, timeout_seconds: int | float | tuple[float, float] = (3.0, 5.0), max_retries: int = 0) -> None:
+        if isinstance(timeout_seconds, (int, float)):
+            self._timeout: tuple[float, float] = (min(3.0, float(timeout_seconds)), float(timeout_seconds))
+        else:
+            self._timeout = timeout_seconds
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": _USER_AGENT})
         self._session.max_redirects = 5
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=0.2,
+            status_forcelist=[500, 502, 503, 504],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retry_strategy)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     def fetch(
         self,

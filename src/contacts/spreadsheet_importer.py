@@ -104,6 +104,11 @@ class SpreadsheetParseResult:
     valid_contacts: list[ContactRecord]
     errors: list[ImportRowError]
 
+    @property
+    def contacts(self) -> list[ContactRecord]:
+        """Backward-compatible alias for valid_contacts."""
+        return self.valid_contacts
+
 
 # ---------------------------------------------------------------------------
 # Format Detectors & Sheet Readers

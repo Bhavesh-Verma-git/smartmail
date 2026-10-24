@@ -25,56 +25,56 @@ SmartMail automates the time-consuming aspects of company research, technical al
 
 ---
 
-## Architecture & Workflow
+## Architecture & Six Workflow Stages
 
 ```
 [ Candidate CV / Master Profile ]  +  [ Contact List (CSV / Excel) ]
                                 |
                                 v
                +----------------------------------+
-               | Stage 1: Import & Normalization  |
-               | - Column mapping & validation    |
-               | - Email syntax & domain parser   |
+               | 1. Upload CV                     |
+               | - Byte-for-byte PDF preservation |
+               | - SHA-256 digest verification    |
                +----------------------------------+
-                                |
-                                v
+                               |
+                               v
                +----------------------------------+
-               | Stage 2: Research & Scraping     |
-               | - Official website & tech blogs  |
-               | - Tavily Search (optional)       |
-               | - Rate-limiting & HTTP retries   |
+               | 2. Import Contacts               |
+               | - CSV / XLSX / XLS ingestion     |
+               | - Column mapping & syntax checks |
                +----------------------------------+
-                                |
-                                v
+                               |
+                               v
                +----------------------------------+
-               | Stage 3: Verification & Match    |
-               | - Domain-to-company check        |
+               | 3. Research & Verify             |
+               | - Company domain & identity      |
                | - AI/ML relevance assessment     |
-               | - Candidate skill & project fit  |
+               | - Recipient identity & vacancy   |
                +----------------------------------+
-                                |
-                                v
+                               |
+                               v
                +----------------------------------+
-               | Stage 4: Drafting & Synthesis    |
-               | - Gemini / Groq / Offline engine |
+               | 4. Generate Drafts               |
                | - Truthful personalization       |
-               | - SHA-256 CV attachment          |
+               | - Evidence & profile grounding   |
+               | - Exact CV PDF attachment        |
                +----------------------------------+
-                                |
-                                v
+                               |
+                               v
                +----------------------------------+
-               | Stage 5: Human Review Queue (UI) |
+               | 5. Review & Approve              |
                | - Inspect research evidence      |
                | - Edit subject / body            |
+               | - Approval invalidation on edits |
                | - Approve, Reject, or Hold       |
                +----------------------------------+
-                                |
-                                v
+                               |
+                               v
                +----------------------------------+
-               | Stage 6: Safeguarded Dispatcher  |
-               | - Dry-run simulation recording   |
-               | - Duplicate prevention across db |
-               | - Live send disabled by default  |
+               | 6. Dry-Run & Audit               |
+               | - Simulated delivery recording   |
+               | - Duplicate-send prevention lock |
+               | - SQLite audit trail persistence |
                +----------------------------------+
 ```
 
@@ -139,14 +139,13 @@ python -m src.ui.app
 ```
 Then open `http://127.0.0.1:5000` in your web browser.
 
-**Web Workflow Steps:**
-1. **Upload CV**: Upload your standard resume PDF (stored securely in `output/uploaded_cvs/` with SHA-256 checksum).
-2. **Upload Contacts**: Supply a CSV or Excel file containing contact emails, target companies, and optional notes.
-3. **Map Columns**: Map headers to standard fields (Email, Company, Name, Website, Role/Notes).
-4. **Preview & Verify**: Inspect parsed rows and syntax validation flags.
-5. **Run Batch Pipeline**: Execute company research, AI relevance scoring, and draft synthesis.
-6. **Review Queue**: Inspect research provenance, view AI evidence excerpts, edit subject/body, and approve/reject drafts.
-7. **Simulated Dispatch**: Test draft delivery in dry-run mode and inspect records in the SQLite send log (`data/send_log.db` or the `/send-log` web view).
+**The Six Workflow Stages:**
+1. **Upload CV**: Register standard resume PDF (stored securely in output/uploaded_cvs/ with SHA-256 checksum).
+2. **Import Contacts**: Import CSV/XLS/XLSX files, map columns, validate rows, and review pre-flight errors before confirmation.
+3. **Research & Verify**: Perform company discovery, domain verification, recipient name verification, and AI/ML technical relevance assessment.
+4. **Generate Drafts**: Synthesize truthful personalized emails grounded in verified company evidence and candidate profile facts.
+5. **Review & Approve**: Human-in-the-loop draft inspection, body/subject editing (with approval invalidation), approval, and rejection/hold.
+6. **Dry-Run & Audit**: Simulate dispatch without network transmission and inspect persistent audit records in SQLite (data/send_log.db).
 
 ### CLI Interface
 SmartMail can also be managed via the CLI:

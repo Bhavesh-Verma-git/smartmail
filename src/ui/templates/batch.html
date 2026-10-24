@@ -20,8 +20,88 @@
     <a href="{{ url_for('review_queue') }}" class="btn btn-primary btn-sm">
       Go to Review Queue ({{ batch.drafted_count }})
     </a>
+    <form action="{{ url_for('delete_batch_drafts_route', batch_id=batch.batch_id) }}" method="POST" style="display:inline;" onsubmit="return confirm('Delete all {{ batch.drafted_count }} drafts generated for this batch? This will remove draft JSON files.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-secondary btn-sm" style="color:var(--danger); border-color: rgba(239,68,68,0.4);" title="Delete drafts generated in this batch">
+        Delete Batch Drafts
+      </button>
+    </form>
+  </div>
+{% if batch.status == 'ERROR' %}
+<div class="alert alert-danger" style="margin-bottom: 1.5rem;">
+  <div style="width: 100%;">
+    <div style="font-weight: 600; margin-bottom: 0.35rem;">Batch Processing Halted with Error:</div>
+    <div style="font-size: 13px;">{{ batch.error or 'An unexpected error occurred during batch execution. Please review inputs and try again.' }}</div>
   </div>
 </div>
+{% endif %}
+
+{% if batch.status == 'PROCESSING' %}
+<div id="batch-progress-card" class="card" style="margin-bottom: 1.5rem; border-color: var(--color-primary); background: var(--color-surface);">
+  <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="display:flex; align-items:center; gap:0.75rem;">
+      <span class="live-pulse" style="display:inline-block; width:10px; height:10px; border-radius:50%; background-color: var(--color-primary);"></span>
+      <h2 class="card-title" style="margin:0; font-size:14px; text-transform:uppercase; letter-spacing:0.05em; color:var(--color-primary);">
+        Batch Processing in Background
+      </h2>
+    </div>
+    <span id="batch-pct-label" style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--color-primary);">
+      {{ ((batch.processed_count / (batch.total_rows or 1)) * 100)|round|int }}%
+    </span>
+  </div>
+  <div style="padding: 1.25rem;">
+    <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.08); border-radius: 9999px; overflow: hidden; margin-bottom: 1rem;">
+      <div id="batch-progress-bar" style="height: 100%; width: {{ ((batch.processed_count / (batch.total_rows or 1)) * 100)|round|int }}%; background: linear-gradient(90deg, var(--color-primary), var(--color-success)); transition: width 0.3s ease;"></div>
+    </div>
+    <div style="display: flex; gap: 1.5rem; font-size: 13px; color: var(--color-text-muted);">
+      <div>Processed: <strong id="prog-proc" style="color:var(--color-text);">{{ batch.processed_count }}</strong> / {{ batch.total_rows }}</div>
+      <div>Drafted: <strong id="prog-draft" style="color:var(--color-success);">{{ batch.drafted_count }}</strong></div>
+      <div>Review Required: <strong id="prog-rev" style="color:var(--color-warning);">{{ batch.review_required_count }}</strong></div>
+      <div>Blocked: <strong id="prog-blk" style="color:var(--color-danger);">{{ batch.blocked_count }}</strong></div>
+      <div>Failed: <strong id="prog-fail" style="color:var(--color-danger);">{{ batch.failed_count }}</strong></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const batchId = "{{ batch.batch_id }}";
+  const interval = setInterval(async function() {
+    try {
+      const res = await fetch(`/batch/${batchId}/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      const pct = data.percent || 0;
+      const bar = document.getElementById('batch-progress-bar');
+      const label = document.getElementById('batch-pct-label');
+      if (bar) bar.style.width = pct + '%';
+      if (label) label.textContent = pct + '%';
+
+      const proc = document.getElementById('prog-proc');
+      if (proc) proc.textContent = data.processed_count;
+      const dft = document.getElementById('prog-draft');
+      if (dft) dft.textContent = data.drafted_count;
+      const rev = document.getElementById('prog-rev');
+      if (rev) rev.textContent = data.review_required_count;
+      const blk = document.getElementById('prog-blk');
+      if (blk) blk.textContent = data.blocked_count;
+      const fail = document.getElementById('prog-fail');
+      if (fail) fail.textContent = data.failed_count;
+
+      if (data.status === 'COMPLETED' || data.status === 'ERROR') {
+        clearInterval(interval);
+        setTimeout(function() {
+          window.location.reload();
+        }, 1200);
+      }
+    } catch(err) {
+      console.warn("Status poll error:", err);
+    }
+  }, 1500);
+})();
+</script>
+{% endif %}
 
 <!-- Summary Metrics (Stage 3 Enhanced) -->
 <div class="stats-row">
@@ -33,13 +113,13 @@
 
   <div class="stat-item">
     <span class="stat-label">Confident</span>
-    <span class="stat-value" style="color:#4ade80;">{{ batch.confident_count or 0 }}</span>
+    <span class="stat-value" style="color:var(--success);">{{ batch.confident_count or 0 }}</span>
     <span class="stat-desc">Outreach ready</span>
   </div>
 
   <div class="stat-item">
     <span class="stat-label">Review Name</span>
-    <span class="stat-value" style="color:#fbbf24;">{{ batch.review_name_count or 0 }}</span>
+    <span class="stat-value" style="color:var(--warning);">{{ batch.review_name_count or 0 }}</span>
     <span class="stat-desc">Generic / unverified name</span>
   </div>
 
@@ -57,16 +137,16 @@
 
   <div class="stat-item">
     <span class="stat-label">Eliminated</span>
-    <span class="stat-value" style="color:#f87171;">{{ batch.eliminated_count or 0 }}</span>
+    <span class="stat-value" style="color:var(--danger);">{{ batch.eliminated_count or 0 }}</span>
     <span class="stat-desc">Unresolvable / blocked</span>
   </div>
 </div>
 
 <!-- Errors & Skipped Rows Panel (If Any) -->
 {% if batch.errors %}
-<div class="card" style="margin-bottom: 2rem; border-color: rgba(239, 68, 68, 0.3);">
+<div class="card" style="margin-bottom: 2rem; border-color: rgba(220, 38, 38, 0.3);">
   <div class="card-header">
-    <h2 class="card-title" style="color: #f87171;">
+    <h2 class="card-title" style="color: var(--danger);">
       <span>Invalid or Skipped Rows ({{ batch.errors|length }})</span>
     </h2>
     <span style="font-size: 11px; color: var(--text-dim);">These rows had syntax or import defects and were excluded from research.</span>
@@ -216,7 +296,7 @@
             <td style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
               <div>{{ r.reason_summary or r.message }}</div>
               {% if r.error %}
-                <div style="color: #f87171; font-size: 11px; margin-top: 2px;">{{ r.error }}</div>
+                <div style="color: var(--danger); font-size: 11px; margin-top: 2px;">{{ r.error }}</div>
               {% endif %}
             </td>
             <td style="text-align: right; white-space: nowrap;">
@@ -312,7 +392,7 @@
       <!-- 4. Contradictions / Retrieval Failures (If any) -->
       <div class="evidence-section" id="modalContradictionsSection" style="display: none;">
         <div class="evidence-section-header">
-          <span style="color: #f87171;">Contradictions &amp; Caveats</span>
+          <span style="color: var(--danger);">Contradictions &amp; Caveats</span>
         </div>
         <div class="contradiction-box" id="modalContradictionsText"></div>
       </div>

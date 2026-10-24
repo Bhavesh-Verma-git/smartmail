@@ -216,19 +216,37 @@ def _assess_company(
     -------
     "VERIFIED" | "REVIEW" | "BLOCKED"
     """
-    # BLOCKED: no company name was supplied on a corporate-domain contact.
-    # Domain discovery alone cannot resolve company identity when the company
-    # name is unknown — we have no name to validate retrieved content against.
-    # Exception: free-provider emails (domain=NOT_APPLICABLE) lack a corporate
-    # domain to begin with, so missing company name stays REVIEW for human
-    # triage rather than being silently discarded.
-    if not inp.company_name and domain != NOT_APPLICABLE:
-        blocking_reasons.append(
-            "Company identity and domain relationship are both unresolved. "
-            "No company name was supplied so identity cannot be established. "
-            f"identity_status={identity}, domain_relationship_status={domain}."
-        )
-        return BLOCKED
+    # When company name is not explicitly supplied in the spreadsheet:
+    # 1. If corporate domain website was retrieved and matched (domain == SUPPORTED),
+    #    mark company as REVIEW (never falsely VERIFIED without human check) and record review flags.
+    # 2. If free-provider (domain == NOT_APPLICABLE), mark company as REVIEW for neutral inquiry triage.
+    # 3. If domain could not be verified/discovered either (RES_REVIEW or UNKNOWN), mark BLOCKED.
+    if not inp.company_name:
+        if domain == SUPPORTED:
+            review_flags.append(
+                f"Company name not supplied in spreadsheet; inferred from domain '{inp.registered_domain}'. "
+                "Human review required before outreach."
+            )
+            notes.append(
+                f"Domain '{inp.registered_domain}' website was retrieved. Company identity requires human verification."
+            )
+            return _REVIEW
+        elif domain == NOT_APPLICABLE:
+            review_flags.append(
+                f"Email is from a free provider ('{inp.registered_domain}') with no company name supplied. "
+                "Employer cannot be identified from domain; human review required."
+            )
+            notes.append(
+                "Free email provider detected with no company name: employer identity unknown."
+            )
+            return _REVIEW
+        else:
+            blocking_reasons.append(
+                "Company identity and domain relationship are both unresolved. "
+                f"No company name was supplied and email domain website could not be verified for '{inp.registered_domain}' "
+                f"(domain_relationship_status={domain})."
+            )
+            return BLOCKED
 
     # BLOCKED: both identity and domain are weak simultaneously
     if identity in (RES_REVIEW, UNKNOWN) and domain in (RES_REVIEW, UNKNOWN):

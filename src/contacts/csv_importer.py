@@ -112,6 +112,11 @@ class ImportResult:
     contacts: list[ContactRecord] = field(default_factory=list)
     errors: list[ImportRowError] = field(default_factory=list)
 
+    @property
+    def valid_contacts(self) -> list[ContactRecord]:
+        """Alias for contacts to align with SpreadsheetParseResult."""
+        return self.contacts
+
 
 # ---------------------------------------------------------------------------
 # CSV importer

@@ -45,6 +45,12 @@ GENERIC_LOCAL_PARTS: frozenset[str] = frozenset({
     "coo",
     "leadership",
     "management",
+    "intern",
+    "interns",
+    "internship",
+    "internships",
+    "manager",
+    "staffing",
 })
 
 # Status codes for recipient name verification
@@ -101,23 +107,32 @@ def infer_name_from_local_part(local_part: str) -> str:
     """
     if not local_part:
         return ""
-    
+
     cleaned = local_part.strip().lower()
     if cleaned in GENERIC_LOCAL_PARTS:
         return ""
-    
-    # Remove trailing numbers like john123 -> john
-    cleaned = re.sub(r"\d+$", "", cleaned)
-    if not cleaned or len(cleaned) < 2:
+
+    functional_prefixes = (
+        "hr-", "hr_", "hr.", "hrd", "hrindia", "hrteam", "hrdept", "hrops", "hroperations",
+        "careers", "talent", "recruit", "hiring", "internship", "internships", "staffing"
+    )
+    if any(cleaned.startswith(p) for p in functional_prefixes) or any(
+        p in cleaned for p in ("recruiting", "recruitment", "internship", "internships", "staffing", "talentacquisition")
+    ):
         return ""
-    
+
     # Split on common separators
-    parts = re.split(r"[._\-+]+", cleaned)
-    parts = [p.capitalize() for p in parts if p and not p.isdigit()]
-    
+    parts = [p for p in re.split(r"[._\-+]+", cleaned) if p and not p.isdigit()]
+    if not parts or any(p in GENERIC_LOCAL_PARTS for p in parts):
+        return ""
+
+    # Remove trailing numbers like john123 -> john
+    parts = [re.sub(r"\d+$", "", p) for p in parts]
+    parts = [p.capitalize() for p in parts if len(p) >= 2]
+
     if not parts:
         return ""
-    
+
     return " ".join(parts)
 
 
@@ -142,22 +157,31 @@ def resolve_recipient(
 
     supplied = (actual_supplied or "").strip()
     verified = (verified_name_from_evidence or "").strip()
-    
+
     local_part = ""
     display_name = ""
     if email_result is not None:
         local_part = (email_result.local_part or "").strip().lower()
         display_name = (email_result.display_name or "").strip()
-    
+
     # 1. Check if generic / functional mailbox
-    is_generic = local_part in GENERIC_LOCAL_PARTS
+    parts_lower = [p for p in re.split(r"[._\-+]+", local_part) if p]
+    is_generic = (
+        local_part in GENERIC_LOCAL_PARTS
+        or any(p in GENERIC_LOCAL_PARTS for p in parts_lower)
+        or any(local_part.startswith(p) for p in (
+            "hr-", "hr_", "hr.", "hrd", "hrindia", "hrteam", "hrdept", "hrops", "hroperations",
+            "careers", "talent", "recruit", "hiring", "internship", "internships", "staffing"
+        ))
+        or any(p in local_part for p in ("recruiting", "recruitment", "internship", "internships", "staffing", "talentacquisition"))
+    )
     inferred_role = ""
     if is_generic:
-        if local_part in ("founder", "founders"):
+        if any(p in ("founder", "founders") for p in parts_lower):
             inferred_role = "Founder"
-        elif local_part in ("ceo", "cto", "coo"):
-            inferred_role = local_part.upper()
-        elif local_part in ("hr", "careers", "jobs", "recruiting", "recruitment", "talent"):
+        elif any(p in ("ceo", "cto", "coo") for p in parts_lower):
+            inferred_role = next(p.upper() for p in parts_lower if p in ("ceo", "cto", "coo"))
+        elif any(p in ("hr", "careers", "jobs", "recruiting", "recruitment", "talent", "hiring", "intern", "internship", "internships", "manager", "staffing") for p in parts_lower):
             inferred_role = "Talent / Recruiting Team"
         else:
             inferred_role = "General Inquiries Team"

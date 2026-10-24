@@ -38,6 +38,7 @@ coverage.xml
 .idea/
 *tempCodeRunnerFile*
 tests/scratch_*.py
+scratch/
 
 # OS
 Thumbs.db

@@ -46,10 +46,12 @@ from src.cv.generator import generate_tailored_cv
 from src.cv.models import ProjectSelectionResult
 from src.cv.selector import select_projects
 from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMode
+from src.outreach.quality_gate import QUALITY_GATE_CHECKS_METADATA
 from src.outreach.send_log import SendLog
 from src.profile.loader import load_profile
 from src.ui.cv_validator import MAX_CV_SIZE_BYTES, format_file_size, validate_cv_stream
 from src.ui.storage import (
+    _atomic_write_json,
     approve_draft,
     clear_registered_cv,
     get_batch_record,
@@ -68,8 +70,12 @@ from src.ui.storage import (
     save_session,
     store_and_register_cv,
     update_draft,
-    _atomic_write_json,
+    regenerate_draft_content,
+    delete_draft,
+    delete_drafts_for_batch,
+    clear_all_drafts,
 )
+from src.workflow.batch_runner import BackgroundBatchRunner
 from src.workflow.engine import OutreachWorkflow
 
 
@@ -134,9 +140,14 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
                     or request.headers.get("X-Requested-With") == "XMLHttpRequest"
                     or "application/json" in request.headers.get("Accept", "")
                 )
+                if not expected:
+                    err_msg = "CSRF validation failed: session expired or missing. Please refresh the page and try again."
+                else:
+                    err_msg = "CSRF validation failed: missing or invalid CSRF token. Please refresh the page and try again."
+
                 if is_ajax:
-                    return jsonify({"success": False, "error": "CSRF validation failed: missing or invalid CSRF token."}), 400
-                return "CSRF validation failed: missing or invalid CSRF token.", 400
+                    return jsonify({"success": False, "error": err_msg}), 400
+                return err_msg, 400
         return None
 
     @app.errorhandler(413)
@@ -170,9 +181,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         }
 
     # -----------------------------------------------------------------------
-    # Route: Dashboard
+    # Route: Dashboard (Overview)
     # -----------------------------------------------------------------------
     @app.route("/")
+    @app.route("/overview")
     def dashboard() -> str:
         stats = get_dashboard_stats(send_log=_get_send_log())
         return render_template("dashboard.html", active_tab="dashboard", stats=stats)
@@ -446,6 +458,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         uploaded_cv_path = cv_meta.get("path") if cv_meta.get("exists") else None
 
         send_log = _get_send_log()
+        stage = "initializing workflow"
         try:
             workflow = OutreachWorkflow(
                 default_mode=mode,
@@ -459,150 +472,59 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             batch_id = f"batch_{uuid.uuid4().hex[:10]}"
 
             if file_token:
+                stage = "validating session token"
                 if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", file_token):
-                    flash("Invalid spreadsheet token format.", "danger")
+                    flash("Invalid spreadsheet token format. Please re-upload your file.", "danger")
                     return redirect(url_for("import_contacts_page"))
-                # Stage 2: Process from spreadsheet token with custom mapping
                 batches_dir = Path("output/batches_input").resolve()
                 matching = [p for p in batches_dir.glob(f"{file_token}_*") if p.resolve().is_relative_to(batches_dir)]
                 if not matching:
-                    flash(f"Spreadsheet session expired. Please re-upload your contact file.", "warning")
+                    flash("Spreadsheet session expired. Please re-upload your contact file.", "warning")
                     return redirect(url_for("import_contacts_page"))
                 contact_file_path = matching[0]
                 sheet_name = request.form.get("sheet_name")
                 mapping_str = request.form.get("mapping")
                 mapping = json.loads(mapping_str) if mapping_str else None
 
+                stage = "parsing spreadsheet and applying column mapping"
                 parse_res = parse_spreadsheet_contacts(contact_file_path, mapping=mapping, sheet_name=sheet_name)
-                batch_res = workflow.process_import_result(
-                    import_result=parse_res,
-                    job_description=job_description,
-                    target_role=target_role,
-                )
             else:
                 # Legacy / direct CSV upload fallback
+                stage = "saving uploaded CSV"
                 output_dir = Path("output/batches_input")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 csv_save_path = output_dir / f"{batch_id}.csv"
                 file.save(str(csv_save_path))
 
-                batch_res = workflow.process_csv(
-                    csv_path=csv_save_path,
-                    job_description=job_description,
-                    target_role=target_role,
-                )
+                stage = "parsing uploaded CSV"
+                parse_res = import_contacts_from_csv(csv_save_path)
 
-            # Persist drafts and record outcomes
-            results_list = []
-            for i, wf_res in enumerate(batch_res.results):
-                draft_id = wf_res.draft.draft_id if wf_res.draft else None
-                rec_res = wf_res.recipient_resolution
-                classification_dict = wf_res.classification.to_dict() if wf_res.classification else {}
+            # Start background batch execution with bounded concurrency
+            stage = "scheduling background batch runner"
+            runner = BackgroundBatchRunner.get_instance()
+            wait_for_completion = bool(app.config.get("TESTING", False))
+            runner.start_batch(
+                batch_id=batch_id,
+                import_result=parse_res,
+                workflow=workflow,
+                target_role=target_role,
+                job_description=job_description,
+                campaign_id=campaign_id,
+                mode=mode,
+                max_workers=4,
+                wait_for_completion=wait_for_completion,
+            )
 
-                # Format evidence items safely for JSON
-                evidence_list = []
-                if wf_res.research_result and getattr(wf_res.research_result, "evidence", None):
-                    for ev in wf_res.research_result.evidence:
-                        evidence_list.append({
-                            "source_url": getattr(ev, "source_url", ""),
-                            "source_type": getattr(ev, "source_type", ""),
-                            "title": getattr(ev, "title", ""),
-                            "retrieval_status": getattr(ev, "retrieval_status", ""),
-                            "extracted_text": getattr(ev, "extracted_text", "")[:400],
-                            "claim_supported": getattr(ev, "claim_supported", ""),
-                            "contradictions": getattr(ev, "contradictions", []),
-                            "supports": getattr(ev, "supports", []),
-                        })
-
-                if wf_res.draft:
-                    v_pipe = wf_res.verification
-                    v_details = {}
-                    if v_pipe:
-                        v_details = {
-                            "email_syntax_valid": True,
-                            "company_identity_status": getattr(v_pipe.verification, "company_status", "REVIEW"),
-                            "company_identity_note": "; ".join(getattr(v_pipe.verification, "verification_notes", [])) or "Evaluated by company research",
-                            "domain_relationship_status": "SUPPORTED" if getattr(v_pipe.verification, "overall_status", "") != "BLOCKED" else "REVIEW",
-                            "domain_relationship_note": "Domain checked against company identity",
-                            "relevance_status": getattr(v_pipe.match, "relevance_status", "REVIEW"),
-                            "matched_areas": getattr(v_pipe.match, "matched_areas", []),
-                            "role_status": getattr(v_pipe.match, "case_type", "GENERAL_INQUIRY"),
-                            "role_status_note": getattr(v_pipe.match, "explanation", ""),
-                            "source_urls": getattr(v_pipe.verification, "evidence_sources", []),
-                            "snippets": [],
-                        }
-
-                    save_draft_record(
-                        draft=wf_res.draft,
-                        campaign_id=campaign_id,
-                        verification_details=v_details,
-                        classification=classification_dict,
-                        research_evidence=evidence_list,
-                    )
-
-                results_list.append({
-                    "row_number": wf_res.row_number if wf_res.row_number is not None else (i + 1),
-                    "status": wf_res.status,
-                    "contact_email": wf_res.contact_email,
-                    "company_name": wf_res.company_name,
-                    "resolved_company": getattr(wf_res.research_result, "resolved_company_name", "") or wf_res.company_name,
-                    "supplied_company": getattr(wf_res.contact, "company_name", "") if wf_res.contact else "",
-                    "supplied_name": getattr(wf_res.contact, "contact_name", "") if wf_res.contact else "",
-                    "inferred_name": getattr(rec_res, "inferred_name", "") if rec_res else "",
-                    "verified_name": getattr(rec_res, "verified_name", "") if rec_res else "",
-                    "recipient_name": getattr(rec_res, "resolved_name", "") if rec_res else (getattr(wf_res.contact, "contact_name", "") if wf_res.contact else ""),
-                    "recipient_status": getattr(rec_res, "status", "UNKNOWN") if rec_res else "UNKNOWN",
-                    "name_verification_status": getattr(rec_res, "name_verification_status", "UNVERIFIED") if rec_res else "UNVERIFIED",
-                    "is_generic_inbox": getattr(rec_res, "is_generic", False) if rec_res else False,
-                    "ai_ml_relevant": wf_res.classification.ai_ml_relevant if wf_res.classification else False,
-                    "classification": wf_res.classification.primary_outcome if wf_res.classification else wf_res.status,
-                    "reason_code": wf_res.classification.reason_code if wf_res.classification else "",
-                    "reason_summary": wf_res.classification.reason_summary if wf_res.classification else wf_res.message,
-                    "matched_areas": wf_res.classification.matched_areas if wf_res.classification else [],
-                    "evidence_sources": wf_res.classification.evidence_sources if wf_res.classification else [],
-                    "evidence_items": evidence_list,
-                    "contradictions": wf_res.classification.contradictions if wf_res.classification else [],
-                    "message": wf_res.message,
-                    "error": wf_res.error,
-                    "draft_id": draft_id,
-                    "generation_status": getattr(wf_res.draft, "generation_status", "DRAFT_GENERATED") if wf_res.draft else "GENERATION_FAILED",
-                    "personalization_explanation": getattr(wf_res.draft, "personalization_explanation", "") if wf_res.draft else "",
-                    "matched_skills": getattr(wf_res.draft, "matched_skills", []) if wf_res.draft else [],
-                    "matched_projects": getattr(wf_res.draft, "matched_projects", []) if wf_res.draft else [],
-                    "original_fields": getattr(wf_res.contact, "raw_values", {}) if wf_res.contact else {},
-                })
-
-            # Save batch record
-            batch_record = {
-                "batch_id": batch_id,
-                "campaign_id": campaign_id,
-                "target_role": target_role,
-                "mode": mode.value,
-                "total_rows": batch_res.total_rows,
-                "processed_count": batch_res.processed_count,
-                "drafted_count": batch_res.drafted_count,
-                "review_required_count": batch_res.review_required_count,
-                "blocked_count": batch_res.blocked_count,
-                "failed_count": batch_res.failed_count,
-                "confident_count": batch_res.confident_count,
-                "review_name_count": batch_res.review_name_count,
-                "not_ai_relevant_count": batch_res.not_ai_relevant_count,
-                "eliminated_count": batch_res.eliminated_count,
-                "other_review_count": batch_res.other_review_count,
-                "draft_generated_count": getattr(batch_res, "draft_generated_count", 0),
-                "needs_review_count": getattr(batch_res, "needs_review_count", 0),
-                "generation_failed_count": getattr(batch_res, "generation_failed_count", 0),
-                "errors": batch_res.errors,
-                "results": results_list,
-            }
-            save_batch_record(batch_id, batch_record)
-
-            flash(f"Batch {batch_id} processed: {batch_res.drafted_count} drafts generated.", "success")
+            flash(f"Batch {batch_id} initiated. Processing in background.", "info")
             return redirect(url_for("view_batch_result", batch_id=batch_id))
 
         except Exception as exc:
-            app.logger.warning("Batch processing error: %s", exc)
-            flash("An error occurred during batch processing. Please review inputs and try again.", "danger")
+            app.logger.exception("Batch processing failure at stage '%s' for campaign '%s': %s", stage, campaign_id, exc)
+            flash(
+                f"Batch initiation failed during {stage}: {type(exc).__name__} ({str(exc)[:100]}). "
+                "Please review your inputs or column mapping and try again.",
+                "danger",
+            )
             return redirect(url_for("import_contacts_page"))
 
     # -----------------------------------------------------------------------
@@ -615,6 +537,32 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             flash(f"Batch record '{batch_id}' not found.", "warning")
             return redirect(url_for("dashboard"))
         return render_template("batch.html", active_tab="import", batch=batch)
+
+    @app.route("/batch/<batch_id>/status")
+    def batch_status_json(batch_id: str) -> Any:
+        """JSON progress endpoint for live UI updates during background processing."""
+        batch = get_batch_record(batch_id)
+        if not batch:
+            return jsonify({"error": f"Batch '{batch_id}' not found."}), 404
+        status = batch.get("status", "COMPLETED")
+        total = batch.get("total_rows", 0)
+        proc = batch.get("processed_count", 0)
+        if status == "ERROR":
+            pct = int((proc / max(1, total)) * 100) if total > 0 else 0
+        else:
+            pct = int((proc / max(1, total)) * 100) if total > 0 else 100
+        return jsonify({
+            "batch_id": batch_id,
+            "status": status,
+            "error": batch.get("error", None),
+            "total_rows": total,
+            "processed_count": proc,
+            "drafted_count": batch.get("drafted_count", 0),
+            "review_required_count": batch.get("review_required_count", 0),
+            "blocked_count": batch.get("blocked_count", 0),
+            "failed_count": batch.get("failed_count", 0),
+            "percent": pct,
+        })
 
     # -----------------------------------------------------------------------
     # Route: Download Error Reports (CSV & JSON)
@@ -677,6 +625,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             1 for d in all_drafts
             if d.get("review_required") and not d.get("approved") and d.get("status") not in ("APPROVED", "SENT", "REJECTED")
         )
+        approved_count = sum(1 for d in all_drafts if d.get("status") == "APPROVED")
+        sent_count = sum(1 for d in all_drafts if d.get("status") in ("SENT", "SIMULATED_SENT"))
 
         return render_template(
             "review.html",
@@ -685,6 +635,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             current_filter=status_filter,
             total_count=len(all_drafts),
             needs_review_count=needs_review_count,
+            approved_count=approved_count,
+            sent_count=sent_count,
         )
 
     # -----------------------------------------------------------------------
@@ -701,6 +653,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         att_path = draft.get("attachment_path", "")
         cv_exists = bool(att_path and Path(att_path).exists())
         evidence_items = normalize_evidence_summary(draft.get("evidence_summary"))
+        sender_email = os.getenv("SMARTMAIL_TEST_SENDER_EMAIL") or os.getenv("GMAIL_SENDER_ADDRESS") or "test-sender@example.com"
 
         return render_template(
             "draft.html",
@@ -709,6 +662,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             v_details=v_details,
             cv_exists=cv_exists,
             evidence_items=evidence_items,
+            sender_email=sender_email,
+            quality_gate_metadata=QUALITY_GATE_CHECKS_METADATA,
         )
 
     @app.route("/drafts/<draft_id>/edit", methods=["POST"])
@@ -735,6 +690,17 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
         return redirect(url_for("view_draft", draft_id=draft_id))
 
+    @app.route("/drafts/<draft_id>/regenerate", methods=["POST"])
+    def regenerate_draft_route(draft_id: str) -> Any:
+        try:
+            regenerate_draft_content(draft_id, send_log=_get_send_log())
+            flash("Draft successfully regenerated based on verified company research.", "success")
+        except Exception as exc:
+            app.logger.warning("Error regenerating draft %s: %s", draft_id, exc)
+            flash(f"Could not regenerate draft: {exc}", "danger")
+
+        return redirect(url_for("view_draft", draft_id=draft_id))
+
     @app.route("/drafts/<draft_id>/approve", methods=["POST"])
     def approve_draft_route(draft_id: str) -> Any:
         try:
@@ -757,6 +723,50 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             flash("An error occurred while rejecting the draft. Please try again.", "danger")
 
         return redirect(url_for("view_draft", draft_id=draft_id))
+
+    @app.route("/drafts/<draft_id>/delete", methods=["POST"])
+    def delete_draft_route(draft_id: str) -> Any:
+        try:
+            success = delete_draft(draft_id=draft_id, send_log=_get_send_log())
+            if success:
+                flash(f"Draft {draft_id} permanently deleted.", "info")
+            else:
+                flash(f"Draft {draft_id} could not be deleted or was not found.", "warning")
+        except Exception as exc:
+            app.logger.warning("Error deleting draft: %s", exc)
+            flash(f"Error deleting draft: {exc}", "danger")
+        return redirect(url_for("review_queue"))
+
+    @app.route("/batches/<batch_id>/delete-drafts", methods=["POST"])
+    def delete_batch_drafts_route(batch_id: str) -> Any:
+        try:
+            res = delete_drafts_for_batch(batch_id=batch_id, send_log=_get_send_log())
+            flash(f"Deleted {res.get('deleted_count', 0)} drafts from batch '{batch_id}'.", "info")
+        except Exception as exc:
+            app.logger.warning("Error deleting batch drafts: %s", exc)
+            flash(f"Error deleting batch drafts: {exc}", "danger")
+        return redirect(url_for("view_batch_result", batch_id=batch_id))
+
+    @app.route("/drafts/cleanup", methods=["POST"])
+    def cleanup_drafts_route() -> Any:
+        scope = request.form.get("scope", "unapproved").strip().lower()
+        batch_id = request.form.get("batch_id", "").strip()
+        try:
+            if scope == "batch" and batch_id:
+                res = delete_drafts_for_batch(batch_id, send_log=_get_send_log())
+                cnt = res.get("deleted_count", 0)
+                flash(f"Batch cleanup complete: successfully deleted {cnt} draft(s) for campaign {batch_id}.", "success")
+            else:
+                if scope not in ("unapproved", "rejected", "all"):
+                    scope = "unapproved"
+                res = clear_all_drafts(scope=scope, send_log=_get_send_log())
+                cnt = res.get("deleted_count", 0)
+                scope_label = "all" if scope == "all" else ("unapproved" if scope == "unapproved" else "rejected")
+                flash(f"Cleanup complete: successfully deleted {cnt} {scope_label} draft(s).", "success")
+        except Exception as exc:
+            app.logger.warning("Error during draft cleanup: %s", exc)
+            flash(f"Error during draft cleanup: {exc}", "danger")
+        return redirect(request.referrer or url_for("dashboard"))
 
     @app.route("/drafts/<draft_id>/send", methods=["POST"])
     def send_draft_route(draft_id: str) -> Any:

@@ -40,7 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # --- upload-cv ---
     p_upload = sub.add_parser("upload-cv", help="Register an existing CV file for Uploaded CV Mode.")
-    p_upload.add_argument("--file", required=True, help="Path to CV file (PDF, DOCX, etc.)")
+    p_upload.add_argument("--file", required=True, help="Path to CV file (PDF format)")
 
     # --- run-uploaded ---
     p_run_up = sub.add_parser(

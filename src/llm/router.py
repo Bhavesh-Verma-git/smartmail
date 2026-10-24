@@ -47,6 +47,30 @@ class LLMRouter:
     def has_any_llm(self) -> bool:
         return self.primary.is_configured or self.fallback.is_configured
 
+    def get_router_status(self) -> dict[str, Any]:
+        """Return safe overview of router configuration and key pool states without leaking secrets."""
+        return {
+            "has_any_llm": self.has_any_llm,
+            "primary": {
+                "name": self.primary.provider_name,
+                "configured": self.primary.is_configured,
+                "pool": self.primary.get_pool_status(),
+            },
+            "fallback": {
+                "name": self.fallback.provider_name,
+                "configured": self.fallback.is_configured,
+                "pool": self.fallback.get_pool_status(),
+            },
+            "allow_cv_sharing": self.allow_cv_sharing,
+        }
+
+    def check_all_providers_health(self) -> dict[str, Any]:
+        """Safe explicit health check across all configured providers."""
+        return {
+            "primary": self.primary.check_health(),
+            "fallback": self.fallback.check_health(),
+        }
+
     def generate_json_with_fallback(
         self,
         prompt: str,
@@ -54,20 +78,23 @@ class LLMRouter:
     ) -> LLMResponse:
         """
         Execute structured JSON generation with Gemini -> Groq fallback.
+        Records fallback reasons in audit metadata.
         """
+        primary_failure_reason = ""
         # Try Primary (Gemini)
         if self.primary.is_configured:
             resp = self.primary.generate_json(prompt, system_instruction=system_instruction)
             if resp.success:
                 return resp
-            logger.warning(
-                f"Primary LLM ({self.primary.provider_name}) failed: {resp.error_message}. Trying fallback..."
-            )
+            primary_failure_reason = f"Primary {self.primary.provider_name} failed: {resp.error_message}"
+            logger.warning(f"{primary_failure_reason}. Trying fallback...")
 
         # Try Fallback (Groq)
         if self.fallback.is_configured:
             resp = self.fallback.generate_json(prompt, system_instruction=system_instruction)
             if resp.success:
+                if primary_failure_reason:
+                    resp.fallback_reason = primary_failure_reason
                 return resp
             logger.warning(f"Fallback LLM ({self.fallback.provider_name}) failed: {resp.error_message}.")
 
@@ -75,6 +102,41 @@ class LLMRouter:
             success=False,
             provider_name="none",
             error_message="No configured LLM succeeded. Falling back to offline deterministic logic.",
+            fallback_reason=primary_failure_reason,
+        )
+
+    def generate_text_with_fallback(
+        self,
+        prompt: str,
+        system_instruction: str = "",
+    ) -> LLMResponse:
+        """
+        Execute plain text generation with Gemini -> Groq fallback.
+        Records fallback reasons in audit metadata.
+        """
+        primary_failure_reason = ""
+        # Try Primary (Gemini)
+        if self.primary.is_configured:
+            resp = self.primary.generate_text(prompt, system_instruction=system_instruction)
+            if resp.success:
+                return resp
+            primary_failure_reason = f"Primary {self.primary.provider_name} failed: {resp.error_message}"
+            logger.warning(f"{primary_failure_reason}. Trying fallback...")
+
+        # Try Fallback (Groq)
+        if self.fallback.is_configured:
+            resp = self.fallback.generate_text(prompt, system_instruction=system_instruction)
+            if resp.success:
+                if primary_failure_reason:
+                    resp.fallback_reason = primary_failure_reason
+                return resp
+            logger.warning(f"Fallback LLM ({self.fallback.provider_name}) failed: {resp.error_message}.")
+
+        return LLMResponse(
+            success=False,
+            provider_name="none",
+            error_message="No configured LLM succeeded. Falling back to offline deterministic logic.",
+            fallback_reason=primary_failure_reason,
         )
 
     def extract_company_ai_evidence(

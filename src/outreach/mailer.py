@@ -13,6 +13,7 @@ Safeguards:
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from src.contacts.email_parser import parse_email
 from src.outreach.models import DraftStatus, EmailDraft, SendResult
@@ -31,26 +32,31 @@ class ApprovalRequiredError(Exception):
 class EmailReviewManager:
     """
     Manages drafts, human review, editing, and approval tracking.
+    Thread-safe implementation supporting concurrent batch processing.
     """
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._drafts: dict[str, EmailDraft] = {}
         self._sent_recipients: set[str] = set()
 
     def register_draft(self, draft: EmailDraft) -> EmailDraft:
         """Register a newly generated draft for review."""
-        self._drafts[draft.draft_id] = draft
-        return draft
+        with self._lock:
+            self._drafts[draft.draft_id] = draft
+            return draft
 
     def get_draft(self, draft_id: str) -> EmailDraft:
         """Retrieve a draft by ID."""
-        if draft_id not in self._drafts:
-            raise KeyError(f"Draft '{draft_id}' not found.")
-        return self._drafts[draft_id]
+        with self._lock:
+            if draft_id not in self._drafts:
+                raise KeyError(f"Draft '{draft_id}' not found.")
+            return self._drafts[draft_id]
 
     def list_drafts(self) -> list[EmailDraft]:
         """List all registered drafts."""
-        return list(self._drafts.values())
+        with self._lock:
+            return list(self._drafts.values())
 
     def edit_draft(
         self,
@@ -65,50 +71,76 @@ class EmailReviewManager:
         Allow the user to review and edit any draft field before approval.
         Modifying an approved draft resets its approval status to ensure re-review.
         """
-        draft = self.get_draft(draft_id)
-        if recipient is not None:
-            draft.recipient = recipient.strip()
-        if recipient_name is not None:
-            draft.recipient_name = recipient_name.strip()
-        if subject is not None:
-            draft.subject = subject.strip()
-        if body is not None:
-            draft.body = body
-        if attachment_path is not None:
-            draft.attachment_path = attachment_path.strip()
+        with self._lock:
+            draft = self.get_draft(draft_id)
+            if recipient is not None:
+                draft.recipient = recipient.strip()
+            if recipient_name is not None:
+                draft.recipient_name = recipient_name.strip()
+            if subject is not None:
+                draft.subject = subject.strip()
+            if body is not None:
+                draft.body = body
+            if attachment_path is not None:
+                draft.attachment_path = attachment_path.strip()
 
-        # Reset approval if edited
-        draft.approved = False
-        draft.status = DraftStatus.DRAFT
-        return draft
+            # Reset approval if edited
+            draft.approved = False
+            draft.status = DraftStatus.DRAFT
+            return draft
 
     def approve_draft(self, draft_id: str) -> EmailDraft:
         """
         Grant explicit human approval for sending.
         """
-        draft = self.get_draft(draft_id)
-        draft.approved = True
-        draft.status = DraftStatus.APPROVED
-        return draft
+        with self._lock:
+            draft = self.get_draft(draft_id)
+            draft.approved = True
+            draft.status = DraftStatus.APPROVED
+            return draft
 
     def reject_draft(self, draft_id: str, reason: str = "") -> EmailDraft:
         """Mark a draft as rejected."""
-        draft = self.get_draft(draft_id)
-        draft.approved = False
-        draft.status = DraftStatus.REJECTED
-        return draft
+        with self._lock:
+            draft = self.get_draft(draft_id)
+            draft.approved = False
+            draft.status = DraftStatus.REJECTED
+            return draft
 
     def is_duplicate(self, recipient_email: str) -> bool:
         """Check if an email has already been sent to this normalized address."""
-        return recipient_email.strip().lower() in self._sent_recipients
+        with self._lock:
+            return recipient_email.strip().lower() in self._sent_recipients
 
     def record_sent(self, recipient_email: str) -> None:
         """Record that an email was sent to a recipient."""
-        self._sent_recipients.add(recipient_email.strip().lower())
+        with self._lock:
+            self._sent_recipients.add(recipient_email.strip().lower())
 
     def clear_sent_registry(self) -> None:
         """Clear sent history (primarily for test isolation)."""
-        self._sent_recipients.clear()
+        with self._lock:
+            self._sent_recipients.clear()
+
+
+def get_sender_address(profile: dict[str, Any] | None = None) -> str:
+    """
+    Get configured sender email account address for draft previews and test sending context.
+    Separates sender account from recipient email addresses.
+    Precedence:
+    1. SMARTMAIL_TEST_SENDER_EMAIL environment variable (safe local test account)
+    2. GMAIL_SENDER_ADDRESS environment variable
+    3. profile['personal_info']['email'] if available
+    4. Safe fallback test address 'test-sender@example.com'
+    """
+    env_sender = os.getenv("SMARTMAIL_TEST_SENDER_EMAIL") or os.getenv("GMAIL_SENDER_ADDRESS")
+    if env_sender and env_sender.strip():
+        return env_sender.strip()
+    if profile and isinstance(profile, dict):
+        prof_email = profile.get("personal_info", {}).get("email", "")
+        if prof_email and prof_email.strip():
+            return prof_email.strip()
+    return "test-sender@example.com"
 
 
 class EmailSender:
@@ -122,10 +154,12 @@ class EmailSender:
         review_manager: EmailReviewManager,
         provider: Any = None,
         dry_run: bool = True,
+        sender_address: str | None = None,
     ) -> None:
         self.review_manager = review_manager
         self.provider = provider
         self.dry_run = dry_run
+        self.sender_address = sender_address or get_sender_address()
 
     def is_gmail_configured(self) -> bool:
         """Check if Gmail OAuth credentials and token paths are configured."""

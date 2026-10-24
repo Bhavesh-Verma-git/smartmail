@@ -25,7 +25,12 @@ from typing import Any
 
 from src.cv.models import ProjectSelectionResult
 from src.outreach.context import OutreachContext, detect_outreach_context
-from src.outreach.models import EmailDraft, GenerationStatus, WorkflowMode
+from src.outreach.experience_matcher import match_candidate_experience
+from src.outreach.models import EmailDraft, GenerationStatus, PersonalizationRecord, WorkflowMode
+from src.outreach.opportunity_analyzer import analyze_company_opportunity
+from src.outreach.personalized_generator import generate_personalized_email_body
+from src.outreach.quality_gate import evaluate_personalization_quality
+from src.profile.contact_resolver import resolve_candidate_contact
 from src.verification.models import PipelineResult, RELEVANT, SPECIFIC_INTERNSHIP
 
 
@@ -33,27 +38,28 @@ from src.verification.models import PipelineResult, RELEVANT, SPECIFIC_INTERNSHI
 # Internal profile helpers
 # ---------------------------------------------------------------------------
 
-def _candidate_name(profile: dict[str, Any]) -> str:
-    return profile.get("personal_info", {}).get("full_name", "Bhavesh Verma")
+def _candidate_name(profile: dict[str, Any], cv_text: str | None = None) -> str:
+    contact = resolve_candidate_contact(profile, cv_text)
+    return contact.full_name
 
 
 def _preferred_name(profile: dict[str, Any]) -> str:
     return profile.get("personal_info", {}).get("preferred_name", "") or _candidate_name(profile)
 
 
-def _institution(profile: dict[str, Any]) -> str:
-    edu = profile.get("education", [])
-    if edu:
-        return edu[0].get("institution", "IIT Kharagpur")
-    return "IIT Kharagpur"
+def _institution(profile: dict[str, Any], cv_text: str | None = None) -> str:
+    contact = resolve_candidate_contact(profile, cv_text)
+    return contact.institution
 
 
-def _phone(profile: dict[str, Any]) -> str:
-    return profile.get("personal_info", {}).get("phone", "")
+def _phone(profile: dict[str, Any], cv_text: str | None = None) -> str:
+    contact = resolve_candidate_contact(profile, cv_text)
+    return contact.phone
 
 
-def _email_addr(profile: dict[str, Any]) -> str:
-    return profile.get("personal_info", {}).get("email", "")
+def _email_addr(profile: dict[str, Any], cv_text: str | None = None) -> str:
+    contact = resolve_candidate_contact(profile, cv_text)
+    return contact.email
 
 
 def _availability(profile: dict[str, Any]) -> str:
@@ -153,9 +159,24 @@ def _build_salutation(
     generic_keywords = {
         "hr", "careers", "jobs", "info", "contact", "support", "admin",
         "recruiting", "talent", "team", "founder", "founders", "ceo",
-        "inquiries", "inquiry", "office", "hello", "hi", "sales", "hiring"
+        "inquiries", "inquiry", "office", "hello", "hi", "sales", "hiring",
+        "intern", "interns", "internship", "internships", "manager", "staffing",
+        "general", "inbox", "lead", "head", "hrindia", "hrdept", "hrops", "hrd",
     }
-    if is_generic or (name and name.lower() in generic_keywords):
+    name_words = {w.lower() for w in re.findall(r"[A-Za-z]+", name)}
+    name_lower = name.lower()
+    is_generic_name = (
+        is_generic
+        or not name
+        or name_lower in generic_keywords
+        or bool(name_words & generic_keywords)
+        or any(name_lower.startswith(p) for p in (
+            "hr", "career", "talent", "recruit", "jobs", "job", "hiring", "intern", "staffing", "info", "contact", "support", "admin", "office"
+        ))
+        or any(w.startswith(("hr", "career", "talent", "recruit", "job", "hiring", "intern", "staffing")) for w in name_words)
+    )
+
+    if is_generic_name:
         if clean_company:
             return f"Dear Hiring Team at {clean_company},"
         return "Dear Hiring Team,"
@@ -216,13 +237,11 @@ def _build_alignment_paragraph(
     mode: WorkflowMode,
     project_selection: ProjectSelectionResult | None,
     profile: dict[str, Any],
+    research_result: Any = None,
 ) -> str:
     """
-    Build the company-alignment paragraph.
-
-    Only references company technical focus when grounded in verified matched_areas.
-    Never invents company AI claims if unverified.
-    Only references candidate projects and internships when grounded in profile.
+    Build the company-alignment paragraph tailored specifically to the company's
+    technical focus and grounded in verified profile/CV projects and experience.
     """
     clean_company = company_name.strip() if company_name and company_name != "Unknown Company" else ""
 
@@ -236,6 +255,7 @@ def _build_alignment_paragraph(
         has_red_panda = any("red panda" in exp.get("organization", "").lower() for exp in profile_exp)
         has_controlplane = any("controlplane" in p.get("name", "").lower() for p in profile_projects)
         has_nlp_in_profile = any("nlp" in str(exp).lower() or "iiser" in exp.get("organization", "").lower() for exp in profile_exp) or any("nlp" in str(p).lower() for p in profile_projects)
+        has_mlops_in_profile = any("security" in str(p).lower() or "etl" in str(p).lower() for p in profile_projects) or bool(profile_exp)
 
         if mode == WorkflowMode.TAILORED_CV and project_selection:
             p1 = project_selection.primary_project.get("name", "")
@@ -260,21 +280,23 @@ def _build_alignment_paragraph(
 
         # Ground uploaded CV highlights in what actually matched AND what candidate has
         areas_lower = [a.lower() for a in matched_areas]
-        has_genai = any(any(k in a for k in ("generative", "llm", "agent", "rag", "retrieval", "diffusion")) for a in areas_lower)
+        has_genai = any(any(k in a for k in ("generative", "diffusion", "llm")) for a in areas_lower)
+        has_rag = any(any(k in a for k in ("rag", "retrieval", "agent")) for a in areas_lower)
         has_nlp = any(any(k in a for k in ("nlp", "language", "embedding", "text")) for a in areas_lower)
         has_ml = any(any(k in a for k in ("predictive", "machine learning", "data science", "analytics")) for a in areas_lower)
         has_vision = any(any(k in a for k in ("vision", "media", "image")) for a in areas_lower)
 
         highlight_sentences = []
-        if (has_genai or has_vision) and (has_red_panda or has_controlplane):
-            if has_red_panda:
+        if (has_genai or has_vision or has_rag) and (has_red_panda or has_controlplane):
+            if has_red_panda and (has_genai or has_vision):
                 highlight_sentences.append(
                     "During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
                     "working with tools such as Stable Diffusion and ControlNet."
                 )
-            if has_controlplane:
+            if has_controlplane and (has_rag or not has_red_panda):
+                prefix = "Additionally, I" if highlight_sentences else "I"
                 highlight_sentences.append(
-                    "Additionally, I have practical experience building context-aware AI middleware and RAG architectures "
+                    f"{prefix} have practical experience building context-aware AI middleware and RAG architectures "
                     "with an emphasis on low-latency inference and system reliability."
                 )
         elif has_nlp and has_nlp_in_profile:
@@ -282,7 +304,7 @@ def _build_alignment_paragraph(
                 "I have practical experience developing NLP pipelines, language embeddings with DeBERTa-v3, "
                 "and sequence models for text classification and attribute extraction."
             )
-        elif has_ml:
+        elif has_ml and has_mlops_in_profile:
             highlight_sentences.append(
                 "I have practical experience developing machine learning workflows, automated ETL pipelines, "
                 "and classification systems using Scikit-learn, XGBoost, and containerized architectures."
@@ -309,30 +331,46 @@ def _build_alignment_paragraph(
     )
 
 
-def _build_closing(availability: str) -> str:
-    """Return a concise closing paragraph with grammatically correct availability if known."""
+def _build_closing(availability: str, seed_key: str = "") -> str:
+    """Return a concise, natural closing paragraph with grammatically correct availability if known."""
+    clean_avail = (availability or "").strip()
+    avail_phrase = f" I am available for {_format_internship_duration(clean_avail)}." if clean_avail else ""
+
+    if seed_key:
+        seed = sum(ord(c) for c in seed_key) % 3
+        if seed == 1:
+            base = (
+                "I have attached my CV detailing my technical projects and coursework, and would be glad "
+                "to discuss how I could support your engineering goals."
+            )
+            return f"{base}{avail_phrase}"
+        elif seed == 2:
+            base = (
+                "My CV is attached for your review. I would welcome the chance to speak with your team "
+                "about potential technical contributions."
+            )
+            return f"{base}{avail_phrase}"
+
     base = (
         "I have attached my CV for your review and would welcome the opportunity to discuss "
         "how my technical background can contribute to your team."
     )
-    clean_avail = (availability or "").strip()
-    if not clean_avail:
-        return base
-    duration_phrase = _format_internship_duration(clean_avail)
-    return f"{base} I am available for {duration_phrase}."
+    return f"{base}{avail_phrase}"
 
 
-def _build_signature(profile: dict[str, Any]) -> str:
+
+def _build_signature(profile: dict[str, Any], cv_text: str | None = None) -> str:
     """
-    Build clean signature.
-    Sign-off: Best regards, Name, IIT Kharagpur, phone, email.
+    Build clean signature using authoritative candidate contact details.
+    Sign-off: Best regards, Name (IIT Kharagpur), phone, email.
     """
-    name = _candidate_name(profile)
-    institution = _institution(profile)
-    phone = _phone(profile)
-    email = _email_addr(profile)
+    contact = resolve_candidate_contact(profile, cv_text)
+    name = contact.full_name
+    institution = contact.institution
+    phone = contact.phone
+    email = contact.email
 
-    lines = ["Best regards,", name, institution]
+    lines = ["Best regards,", "", f"{name} ({institution})"]
     if phone:
         lines.append(phone)
     if email:
@@ -583,60 +621,125 @@ def draft_outreach_email(
 
     role_mention = target_role or "AI/ML Internship"
 
-    # ---- 5. Assemble body ---------------------------------------------------
-    body_parts: list[str] = [
-        _build_salutation(contact_name, company_name, is_generic=is_generic),
-        "",
-        _build_opening_paragraph(
-            context=context,
-            referrer_name=referrer_name,
-            role_mention=role_mention,
-            company_name=company_name,
-            profile=profile,
-            case_type=case_type,
-        ),
-        "",
-        _build_alignment_paragraph(
-            matched_areas=matched_areas,
-            company_name=company_name,
-            mode=mode,
-            project_selection=project_selection,
-            profile=profile,
-        ),
-        "",
-        _build_closing(availability),
-        "",
-        "Thank you for your time and consideration.",
-        "",
-        _build_signature(profile),
-    ]
+    # ---- 4b. Authoritative Candidate Contact Resolution ---------------------
+    resolved_contact = resolve_candidate_contact(profile, cv_text)
+    if resolved_contact.has_unresolved_conflict:
+        review_required = True
+        conflict_flag = "Conflicting candidate contact email detected across profile and CV; human review required before sending."
+        if conflict_flag not in review_flags:
+            review_flags.append(conflict_flag)
 
-    body = "\n".join(body_parts)
-    subject = build_subject_line(
-        candidate_name=candidate_name,
-        target_role=target_role,
+    # ---- 5. Company Opportunity Analysis & Experience Matching -------------
+    domain_from_email = recipient_email.split("@")[1] if "@" in recipient_email else ""
+    opportunity = analyze_company_opportunity(
+        research_result=research_result,
         company_name=company_name,
+        domain=domain_from_email,
+        matched_areas=matched_areas,
+    )
+    candidate_match = match_candidate_experience(
+        opportunity=opportunity,
+        profile=profile,
+        cv_text=cv_text,
+    )
+
+    # If company has no evidence, record uncertainty flag
+    if opportunity.evidence_strength == "NONE" and not matched_areas:
+        flag = "No reliable company-specific evidence retrieved."
+        if flag not in review_flags:
+            review_flags.append(flag)
+
+    # ---- 6. Evidence-Grounded Email Generation ------------------------------
+    from src.llm.router import LLMRouter
+    router = LLMRouter()
+
+    subject, body, gen_meta = generate_personalized_email_body(
+        opportunity=opportunity,
+        candidate_match=candidate_match,
+        profile=profile,
+        company_name=company_name,
+        contact_name=contact_name,
+        target_role=target_role,
         case_type=case_type,
         context=context,
         referrer_name=referrer_name,
+        mode=mode,
+        project_selection=project_selection,
+        router=router,
+        matched_areas=matched_areas,
     )
 
     draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
-    # ---- 6. Stage 4 Personalization & Generation Status ---------------------
+    # ---- 7. Preliminary Draft for Quality Gate Evaluation -------------------
+    prelim_draft = EmailDraft(
+        draft_id=draft_id,
+        recipient=recipient_email,
+        recipient_name=contact_name,
+        company_name=company_name,
+        subject=subject,
+        body=body,
+        attachment_path=attachment_path,
+        mode=mode,
+        review_required=review_required,
+        review_flags=review_flags,
+        tailored_cv_path=tailored_cv_path,
+    )
+
+    # ---- 8. Personalization Quality Gate ------------------------------------
+    gate_res = evaluate_personalization_quality(
+        draft=prelim_draft,
+        opportunity=opportunity,
+        candidate_match=candidate_match,
+        profile=profile,
+    )
+
+    if not gate_res.passed:
+        review_required = True
+        for rf in gate_res.review_flags_to_add:
+            if rf not in review_flags:
+                review_flags.append(rf)
+
+    # ---- 9. Generation Status -----------------------------------------------
     reason_code = getattr(classification, "reason_code", "") if classification else ""
     if reason_code == "INVALID_EMAIL" or not recipient_email or "@" not in recipient_email:
         generation_status = GenerationStatus.GENERATION_FAILED.value
-    elif review_required:
+    elif review_required or not gate_res.passed:
         generation_status = GenerationStatus.NEEDS_REVIEW.value
     else:
         generation_status = GenerationStatus.DRAFT_GENERATED.value
 
+    # Determine matched skills and highlighted projects
+    legacy_skills, legacy_projects = _determine_cv_connections(matched_areas, profile, cv_text)
+    matched_skills = list(dict.fromkeys(candidate_match.relevant_technologies + legacy_skills))
+    matched_projects = list(dict.fromkeys([candidate_match.primary_experience_name] + legacy_projects))
+    matched_projects = [p for p in matched_projects if p and p != "Applied Machine Learning & Engineering"]
+
     evidence_summary = getattr(research_result, "ai_ml_evidence_summary", "") if research_result else ""
-    matched_skills, matched_projects = _determine_cv_connections(matched_areas, profile, cv_text)
+
+    # ---- 10. Personalization Record Audit -----------------------------------
+    pers_record = PersonalizationRecord(
+        company_finding=opportunity.concrete_finding,
+        evidence_source_url=opportunity.primary_source_url,
+        evidence_source_title=opportunity.primary_source_title,
+        source_excerpt=opportunity.source_excerpt,
+        candidate_experience=candidate_match.primary_experience_name,
+        connection_reasoning=candidate_match.connection_rationale,
+        technical_domain=opportunity.technical_domain,
+        supporting_cv_evidence=candidate_match.supporting_cv_evidence,
+        limitations_or_assumptions=candidate_match.limitations_or_assumptions,
+        contact_discrepancies=[d.to_dict() for d in resolved_contact.discrepancies],
+        unresolved_caveats=opportunity.uncertainties,
+        quality_gate_passed=gate_res.passed,
+        quality_gate_checks=gate_res.checks,
+        quality_gate_notes=gate_res.failure_reasons,
+    )
 
     if generation_status == GenerationStatus.DRAFT_GENERATED.value:
-        explanation_parts = [f"Personalized for {clean_company or 'the company'} based on verified focus in {', '.join(matched_areas)}."]
+        target_disp = opportunity.concrete_finding or (', '.join(matched_areas) if matched_areas else "verified work")
+        if matched_areas and ', '.join(matched_areas) not in target_disp:
+            target_disp = f"{target_disp} ({', '.join(matched_areas)})"
+        explanation_parts = [f"Personalized for {clean_company or 'the company'} based on verified focus in {target_disp}."]
         if matched_projects:
             explanation_parts.append(f"Connected to candidate's background in {', '.join(matched_projects)}.")
         explanation_parts.append(f"Addressed to {contact_name or 'the hiring team'}.")
@@ -670,5 +773,6 @@ def draft_outreach_email(
         matched_skills=matched_skills,
         matched_projects=matched_projects,
         recipient_type=recipient_type,
+        personalization_record=pers_record,
     )
 

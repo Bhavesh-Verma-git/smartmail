@@ -11,6 +11,7 @@ Strict Rules:
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,10 @@ class ProviderStatus:
     groq_configured: bool
     groq_model: str
     share_cv_with_llm: bool
+    gemini_key_count: int = 0
+    groq_key_count: int = 0
+    gemini_masked_keys: tuple[str, ...] = ()
+    groq_masked_keys: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,7 +67,21 @@ class ProviderStatus:
             "groq_configured": self.groq_configured,
             "groq_model": self.groq_model,
             "share_cv_with_llm": self.share_cv_with_llm,
+            "gemini_key_count": self.gemini_key_count,
+            "groq_key_count": self.groq_key_count,
+            "gemini_masked_keys": list(self.gemini_masked_keys),
+            "groq_masked_keys": list(self.groq_masked_keys),
         }
+
+
+def mask_secret(secret: str) -> str:
+    """Safely mask an API key or token for audit logs and UI displays."""
+    if not secret:
+        return ""
+    s = secret.strip()
+    if len(s) <= 8:
+        return "..." + s[-2:]
+    return f"{s[:4]}...{s[-4:]}"
 
 
 def get_tavily_api_key() -> str:
@@ -70,14 +89,85 @@ def get_tavily_api_key() -> str:
     return os.getenv("TAVILY_API_KEY", "").strip()
 
 
+def _parse_key_entries(raw: str) -> list[str]:
+    """Parse comma, newline, or JSON list formatted API key strings safely."""
+    if not raw:
+        return []
+    cleaned = raw.strip().strip("\"'")
+    if not cleaned:
+        return []
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, list):
+                return [str(k).strip().strip("\"'") for k in parsed if str(k).strip().strip("\"'")]
+        except Exception:
+            pass
+    # Split by comma or newline, strip each entry
+    parts: list[str] = []
+    for item in cleaned.replace("\n", ",").split(","):
+        k = item.strip().strip("\"'")
+        if k:
+            parts.append(k)
+    return parts
+
+
 def get_gemini_api_key() -> str:
-    """Retrieve Gemini API key from environment."""
-    return os.getenv("GEMINI_API_KEY", "").strip()
+    """Retrieve primary Gemini API key from environment."""
+    keys = get_gemini_api_keys()
+    return keys[0] if keys else ""
+
+
+def get_gemini_api_keys() -> list[str]:
+    """
+    Retrieve configured Gemini API keys supporting single-key, comma-separated,
+    JSON list, and numbered environment variables (GEMINI_API_KEY_1..5).
+    Handles whitespace, quotes, and empty entries defensively.
+    Returns deduplicated list preserving order.
+    """
+    keys: list[str] = []
+    keys.extend(_parse_key_entries(os.getenv("GEMINI_API_KEY", "")))
+    keys.extend(_parse_key_entries(os.getenv("GEMINI_API_KEYS", "")))
+
+    for i in range(1, 10):
+        keys.extend(_parse_key_entries(os.getenv(f"GEMINI_API_KEY_{i}", "")))
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            deduped.append(k)
+    return deduped
 
 
 def get_groq_api_key() -> str:
-    """Retrieve Groq API key from environment."""
-    return os.getenv("GROQ_API_KEY", "").strip()
+    """Retrieve primary Groq API key from environment."""
+    keys = get_groq_api_keys()
+    return keys[0] if keys else ""
+
+
+def get_groq_api_keys() -> list[str]:
+    """
+    Retrieve configured Groq API keys supporting single-key, comma-separated,
+    JSON list, and numbered environment variables (GROQ_API_KEY_1..5).
+    Handles whitespace, quotes, and empty entries defensively.
+    Returns deduplicated list preserving order.
+    """
+    keys: list[str] = []
+    keys.extend(_parse_key_entries(os.getenv("GROQ_API_KEY", "")))
+    keys.extend(_parse_key_entries(os.getenv("GROQ_API_KEYS", "")))
+
+    for i in range(1, 10):
+        keys.extend(_parse_key_entries(os.getenv(f"GROQ_API_KEY_{i}", "")))
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            deduped.append(k)
+    return deduped
 
 
 def get_gemini_model() -> str:
@@ -121,23 +211,43 @@ def is_cv_sharing_allowed() -> bool:
     return val in ("true", "1", "yes")
 
 
+def get_authoritative_candidate_email() -> str:
+    """Explicitly configured authoritative candidate email, if any."""
+    return (
+        os.getenv("SMARTMAIL_AUTHORITATIVE_EMAIL", "").strip()
+        or os.getenv("SMARTMAIL_CANDIDATE_EMAIL", "").strip()
+    )
+
+
+def get_authoritative_candidate_phone() -> str:
+    """Explicitly configured authoritative candidate phone, if any."""
+    return (
+        os.getenv("SMARTMAIL_AUTHORITATIVE_PHONE", "").strip()
+        or os.getenv("SMARTMAIL_CANDIDATE_PHONE", "").strip()
+    )
+
+
 def get_provider_status() -> ProviderStatus:
     """
     Check configuration state of all providers.
     NEVER returns or logs raw keys.
     """
     tavily_key = get_tavily_api_key()
-    gemini_key = get_gemini_api_key()
-    groq_key = get_groq_api_key()
+    gemini_keys = get_gemini_api_keys()
+    groq_keys = get_groq_api_keys()
 
     return ProviderStatus(
         tavily_configured=bool(tavily_key),
         tavily_model_or_desc="Tavily Search API (REST)",
-        gemini_configured=bool(gemini_key),
+        gemini_configured=bool(gemini_keys),
         gemini_model=get_gemini_model(),
-        groq_configured=bool(groq_key),
+        groq_configured=bool(groq_keys),
         groq_model=get_groq_model(),
         share_cv_with_llm=is_cv_sharing_allowed(),
+        gemini_key_count=len(gemini_keys),
+        groq_key_count=len(groq_keys),
+        gemini_masked_keys=tuple(mask_secret(k) for k in gemini_keys),
+        groq_masked_keys=tuple(mask_secret(k) for k in groq_keys),
     )
 
 

@@ -439,6 +439,43 @@ class SendLog:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def remove_draft_record(self, draft_id: str) -> bool:
+        """
+        Remove draft from send_log UNLESS its status is SUCCESS.
+        Preserves SUCCESS records to prevent duplicate sends and maintain audit history.
+        Returns True if a record was removed.
+        """
+        with self._immediate_conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM send_log WHERE draft_id = ? AND status != 'SUCCESS';",
+                (draft_id,),
+            )
+            return cur.rowcount > 0
+
+    def remove_batch_records(self, campaign_id: str) -> int:
+        """
+        Remove drafts belonging to a campaign UNLESS status is SUCCESS.
+        Returns count of removed records.
+        """
+        with self._immediate_conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM send_log WHERE campaign_id = ? AND status != 'SUCCESS';",
+                (campaign_id,),
+            )
+            return cur.rowcount
+
+    def clear_draft_records(self, keep_success: bool = True) -> int:
+        """
+        Clear draft records from send_log.
+        By default, preserves all SUCCESS records for audit and compliance.
+        """
+        with self._immediate_conn() as conn:
+            if keep_success:
+                cur = conn.execute("DELETE FROM send_log WHERE status != 'SUCCESS';")
+            else:
+                cur = conn.execute("DELETE FROM send_log;")
+            return cur.rowcount
+
     def clear_for_testing(self) -> None:
         """Drop and recreate tables. Only safe for in-memory or test databases."""
         with self._lock:

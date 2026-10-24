@@ -64,8 +64,19 @@
 
     <form action="{{ url_for('edit_draft_route', draft_id=draft.draft_id) }}" method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <!-- Sender Account Info -->
+      <div class="form-group" style="background: var(--bg-subtle); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 1rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+          <div>
+            <span style="color: var(--text-dim); font-size: 11px; text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 2px;">From (Sender Account)</span>
+            <code style="color: var(--text-primary); font-size: 12px;">{{ sender_email }}</code>
+          </div>
+          <span class="badge badge-neutral" style="font-size: 10px; text-transform: uppercase;">Dry-Run Active (No Real Send)</span>
+        </div>
+      </div>
+
       <div class="form-group">
-        <label class="form-label" for="recipientEmail">Recipient Email</label>
+        <label class="form-label" for="recipientEmail">Recipient Email (To)</label>
         <input type="email" id="recipientEmail" name="recipient" class="form-control" value="{{ draft.recipient }}" required>
       </div>
 
@@ -120,9 +131,18 @@
           </button>
         {% endif %}
 
+        <button type="submit" formaction="{{ url_for('regenerate_draft_route', draft_id=draft.draft_id) }}" class="btn btn-secondary" title="Regenerate email body based on company research evidence">
+          &#8635; Regenerate from Research
+        </button>
+
         <!-- Send (Dry Run / Live) -->
         <button type="submit" formaction="{{ url_for('send_draft_route', draft_id=draft.draft_id) }}" class="btn btn-primary" onclick="return confirm('Send email? (Dry-run mode is active by default; email will not be sent over network unless live Gmail is configured).');">
           Send email (Dry Run)
+        </button>
+
+        <!-- Delete Draft Action -->
+        <button type="submit" formaction="{{ url_for('delete_draft_route', draft_id=draft.draft_id) }}" class="btn btn-secondary btn-sm" onclick="return confirm('Permanently delete this draft? This will remove the draft JSON file.');" style="margin-left: auto; color: var(--danger); border-color: rgba(239, 68, 68, 0.4);">
+          Delete Draft
         </button>
       </div>
     </form>
@@ -130,51 +150,194 @@
 
   <!-- Right Column: Stage 3 Classification & Evidence Breakdown -->
   <div>
-    <!-- Stage 4: Personalization & Evidence Rationale Card -->
-    <div class="card" style="margin-bottom: 1.5rem;">
-      <div class="card-header">
-        <h2 class="card-title">Personalization Rationale</h2>
-        {% set gen_st = draft.generation_status or ('NEEDS_REVIEW' if draft.review_required else 'DRAFT_GENERATED') %}
-        <span class="badge {% if gen_st == 'DRAFT_GENERATED' %}badge-confident{% elif gen_st == 'NEEDS_REVIEW' %}badge-review-name{% else %}badge-eliminated{% endif %}">
-          <span class="badge-dot"></span>{{ 'Draft Generated' if gen_st == 'DRAFT_GENERATED' else ('Needs Review' if gen_st == 'NEEDS_REVIEW' else 'Generation Failed') }}
-        </span>
+    <!-- Master Verification & Evidence Audit Section -->
+    {% set pr = draft.personalization_record or {} %}
+    {% set qg_checks = pr.quality_gate_checks or {} %}
+    {% set qg_passed = pr.quality_gate_passed if 'quality_gate_passed' in pr else False %}
+    {% set has_checks = (qg_checks|length > 0) %}
+    {% set qg_meta = quality_gate_metadata if quality_gate_metadata is defined else [
+        ('has_supported_anchor', 'Supported Company Anchor', 'Verifies email reflects concrete company research findings rather than generic claims'),
+        ('relevant_candidate_connection', 'Relevant Candidate Project', 'Cites specific, defensible CV project matched to company technical domain'),
+        ('grounded_candidate_claims', 'Grounded Candidate Claims', 'Candidate technical skills and achievements exist in master profile'),
+        ('no_unsupported_vacancy_claims', 'No False Vacancy Claims', 'Refrains from asserting an advertised job posting when none confirmed'),
+        ('distinguishable_anchor', 'Distinguishable Peer Anchor', 'Uses differentiated technical initiatives; avoids identical boilerplate reused across peers'),
+        ('no_taxonomy_dump', 'No Taxonomy Dumping', 'Avoids long comma-separated laundry lists of generic buzzwords'),
+        ('no_malformed_fragments', 'Clean Extraction Text', 'Free of HTML tags, raw Markdown headers, or web scraping artifacts'),
+        ('contact_consistency', 'Authoritative Contact Consistency', 'Signature email matches authoritative candidate email and profile'),
+        ('concise_and_professional', 'Professional Formatting', 'Standard salutation, valid signature, 60–350 words, no unfilled template placeholders')
+    ] %}
+
+    <div class="card" id="verification-evidence-audit" style="margin-bottom: 1.5rem;">
+      <div class="card-header" style="flex-wrap: wrap; gap: 0.5rem;">
+        <div>
+          <h2 class="card-title" style="display: flex; align-items: center; gap: 0.5rem;">
+            <span>Verification &amp; Evidence Audit</span>
+          </h2>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+            Audits company identity, external source evidence, CV project alignment, and 9 quality gate invariants.
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+          <!-- Quality Gate Status Pill -->
+          {% if has_checks and qg_passed %}
+            <span class="badge badge-success" style="font-size: 11px;"><span class="badge-dot"></span>Quality Gate: 9/9 Passed</span>
+          {% elif has_checks and not qg_passed %}
+            <span class="badge badge-danger" style="font-size: 11px;"><span class="badge-dot"></span>Quality Gate: Flagged</span>
+          {% else %}
+            <span class="badge badge-neutral" style="font-size: 11px;"><span class="badge-dot"></span>Quality Gate: Unverified</span>
+          {% endif %}
+
+          <!-- Human Review Requirement Pill -->
+          {% if draft.review_required %}
+            <span class="badge badge-warning" style="font-size: 11px;"><span class="badge-dot"></span>Human Review Required</span>
+          {% elif draft.status == 'APPROVED' %}
+            <span class="badge badge-success" style="font-size: 11px;"><span class="badge-dot"></span>Review Approved</span>
+          {% else %}
+            <span class="badge badge-confident" style="font-size: 11px;"><span class="badge-dot"></span>Pending Human Confirmation</span>
+          {% endif %}
+        </div>
       </div>
 
-      <div style="font-size: 13px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 0.85rem;">
-        {{ draft.personalization_explanation or 'Personalized based on verified company research and candidate CV facts.' }}
+      <!-- Human Review Required Explanation Banner -->
+      {% if draft.review_required %}
+      <div class="alert alert-warning" style="margin-bottom: 1rem; border-radius: var(--radius-sm); font-size: 12px;">
+        <div style="font-weight: 600; margin-bottom: 0.25rem;">Why Human Review is Required Before Sending:</div>
+        {% if draft.review_flags %}
+          <ul style="padding-left: 1.25rem; line-height: 1.5; margin: 0;">
+            {% for flag in draft.review_flags %}
+              <li>{{ flag }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p style="margin: 0;">Verification pipeline marked contact as requiring human review prior to outreach transmission.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <!-- Section 1: Factual Company, Domain & Role Grounding -->
+      <div style="margin-bottom: 1rem; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.65rem; display: flex; justify-content: space-between;">
+          <span>1. Factual Company &amp; Role Grounding</span>
+          <span style="font-size: 10px; text-transform: none; color: var(--text-dim);">(Distinguished from technical checks)</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.65rem;">
+          <!-- Target Company & Identity Status -->
+          <div style="background: var(--bg-card); padding: 0.6rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 3px;">Verified Company Entity</div>
+            <div style="font-weight: 600; font-size: 13px; color: var(--text-primary); display: flex; align-items: center; justify-content: space-between;">
+              <span>{{ draft.company_name or 'Unknown Company' }}</span>
+              {% set cid_st = v_details.company_identity_status or ('VERIFIED' if draft.company_name and not draft.review_required else 'UNVERIFIED') %}
+              {% if cid_st in ['VERIFIED', 'SUPPORTED'] %}
+                <span class="badge badge-success" style="font-size: 9px;"><span class="badge-dot"></span>VERIFIED</span>
+              {% else %}
+                <span class="badge badge-warning" style="font-size: 9px;"><span class="badge-dot"></span>UNVERIFIED</span>
+              {% endif %}
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+              {{ v_details.company_identity_note or (pr.company_finding if pr.company_finding else 'No independent company identity evidence retrieved.') }}
+            </div>
+          </div>
+
+          <!-- Target Domain & Affiliation -->
+          <div style="background: var(--bg-card); padding: 0.6rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 3px;">Recipient Domain Relationship</div>
+            {% set recipient_domain = draft.recipient.split('@')[1] if '@' in draft.recipient else '' %}
+            <div style="font-weight: 600; font-size: 13px; color: var(--text-primary); display: flex; align-items: center; justify-content: space-between;">
+              <code style="font-size: 12px;">{{ recipient_domain or 'N/A' }}</code>
+              {% set dom_st = v_details.domain_relationship_status or ('AFFILIATED' if recipient_domain else 'UNRESOLVED') %}
+              {% if dom_st in ['SUPPORTED', 'AFFILIATED'] %}
+                <span class="badge badge-success" style="font-size: 9px;"><span class="badge-dot"></span>AFFILIATED</span>
+              {% elif dom_st == 'FREE_PROVIDER' %}
+                <span class="badge badge-neutral" style="font-size: 9px;"><span class="badge-dot"></span>FREE PROVIDER</span>
+              {% else %}
+                <span class="badge badge-warning" style="font-size: 9px;"><span class="badge-dot"></span>UNRESOLVED</span>
+              {% endif %}
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+              {{ v_details.domain_relationship_note or ('Domain mapped to ' ~ (draft.company_name or 'recipient')) }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Vacancy / Hiring Status -->
+        <div style="background: var(--bg-card); padding: 0.6rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <span style="font-size: 11px; color: var(--text-dim); margin-right: 0.5rem;">Internship Vacancy Status:</span>
+              {% set role_st = v_details.role_status or 'GENERAL_INQUIRY' %}
+              {% if role_st == 'OPEN_LISTING' %}
+                <span class="badge badge-success" style="font-size: 10px;"><span class="badge-dot"></span>OPEN LISTING CONFIRMED</span>
+              {% else %}
+                <span class="badge badge-neutral" style="font-size: 10px;"><span class="badge-dot"></span>SPECULATIVE INQUIRY (NO CONFIRMED POSTING)</span>
+              {% endif %}
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+            {{ v_details.role_status_note or 'Drafted as exploratory general internship inquiry to avoid false listing claims.' }}
+          </div>
+        </div>
       </div>
 
-      <div class="evidence-card" style="background: var(--bg-subtle);">
-        <div class="evidence-field-row">
-          <span class="evidence-field-label">Recipient Addressing:</span>
+      <!-- Section 2: External Evidence & Source Attribution -->
+      <div style="margin-bottom: 1rem; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.5rem;">
+          2. Verified Source Evidence &amp; Anchor
+        </div>
+
+        <!-- Source URL (Clickable) -->
+        {% set src_url = pr.evidence_source_url or (v_details.source_urls[0] if v_details.source_urls else (evidence_items[0].source_url if evidence_items else '')) %}
+        <div class="evidence-field-row" style="margin-bottom: 0.4rem;">
+          <span class="evidence-field-label">Source URL:</span>
           <span class="evidence-field-val">
-            {% if draft.recipient_type == 'generic_inbox' %}
-              <span class="badge badge-neutral" style="font-size: 10px;">Generic Inbox</span> Team Salutation ({{ draft.recipient }})
-            {% elif draft.recipient_name %}
-              <span class="badge badge-success" style="font-size: 10px;">Individual</span> {{ draft.recipient_name }}
+            {% if src_url %}
+              <a href="{{ src_url }}" target="_blank" rel="noopener noreferrer" class="evidence-source-link" style="font-weight: 500; text-decoration: underline; word-break: break-all;">
+                {{ src_url }} &nearr;
+              </a>
+              {% if pr.evidence_source_title %}
+                <span style="color: var(--text-dim); font-size: 11px; margin-left: 0.35rem;">({{ pr.evidence_source_title }})</span>
+              {% endif %}
             {% else %}
-              <span class="badge badge-neutral" style="font-size: 10px;">Generic</span> Hiring Team
+              <span style="color: var(--color-danger-text); font-style: italic;">No verified external source URL recorded for this draft</span>
             {% endif %}
           </span>
         </div>
 
-        {% if draft.matched_skills %}
-        <div class="evidence-field-row">
-          <span class="evidence-field-label">Matched CV Skills:</span>
-          <span class="evidence-field-val">{{ draft.matched_skills|join(', ') }}</span>
+        <!-- Synthesized Finding -->
+        {% if pr.company_finding %}
+        <div class="evidence-field-row" style="margin-bottom: 0.4rem;">
+          <span class="evidence-field-label" style="color: var(--primary);">Verified Finding:</span>
+          <span class="evidence-field-val" style="font-weight: 500;">{{ pr.company_finding }}</span>
         </div>
         {% endif %}
 
-        {% if draft.matched_projects %}
-        <div class="evidence-field-row">
-          <span class="evidence-field-label">Highlighted Projects:</span>
-          <span class="evidence-field-val">{{ draft.matched_projects|join(', ') }}</span>
+        <!-- Technical Domain -->
+        {% if pr.technical_domain %}
+        <div class="evidence-field-row" style="margin-bottom: 0.4rem;">
+          <span class="evidence-field-label">Technical Domain:</span>
+          <span class="evidence-field-val">
+            <span class="badge badge-neutral" style="font-size: 10px; font-family: var(--font-mono);">{{ pr.technical_domain }}</span>
+          </span>
         </div>
         {% endif %}
 
+        <!-- Supporting Excerpt -->
+        <div style="margin-top: 0.5rem;">
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px; font-weight: 500;">Supporting Company Excerpt:</div>
+          {% set excerpt = pr.source_excerpt or (evidence_items[0].excerpt if evidence_items else '') %}
+          {% if excerpt %}
+            <blockquote style="margin: 0; background: var(--bg-card); border-left: 3px solid var(--color-primary); padding: 0.5rem 0.75rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); word-break: break-word;">
+              {{ excerpt }}
+            </blockquote>
+          {% else %}
+            <div style="background: var(--bg-card); border: 1px dashed var(--border-color); padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-muted); font-style: italic;">
+              No supporting company source excerpt available for this draft.
+            </div>
+          {% endif %}
+        <!-- Structured Evidence Items List -->
         <div style="margin-top: 0.85rem; border-top: 1px solid var(--border-color); padding-top: 0.75rem;">
           <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.5rem;">
-            Company Evidence
+            Extracted Evidence Items
           </div>
 
           {% set ev_list = evidence_items if evidence_items is defined else (draft.evidence_summary | normalize_evidence) %}
@@ -209,6 +372,95 @@
             </p>
           {% endif %}
         </div>
+      </div>
+
+      <!-- Section 3: Selected CV Project & Match Rationale -->
+      <div style="margin-bottom: 1rem; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem;">
+        <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.5rem;">
+          3. Candidate CV Project Alignment
+        </div>
+
+        {% set sel_proj = (draft.matched_projects[0] if draft.matched_projects else (pr.candidate_experience if pr.candidate_experience else '')) %}
+        <div class="evidence-field-row" style="margin-bottom: 0.4rem;">
+          <span class="evidence-field-label">Selected Project:</span>
+          <span class="evidence-field-val">
+            {% if sel_proj %}
+              <strong style="color: var(--text-primary);">{{ sel_proj }}</strong>
+            {% else %}
+              <span style="color: var(--color-danger-text); font-style: italic;">No specific candidate project cited / ungrounded</span>
+            {% endif %}
+          </span>
+        </div>
+
+        {% set match_rationale = pr.connection_reasoning or draft.personalization_explanation %}
+        {% if match_rationale %}
+        <div class="evidence-field-row" style="margin-bottom: 0.4rem;">
+          <span class="evidence-field-label" style="color: var(--success);">Match Rationale:</span>
+          <span class="evidence-field-val" style="font-size: 12px; line-height: 1.45;">{{ match_rationale }}</span>
+        </div>
+        {% endif %}
+
+        {% if pr.supporting_cv_evidence %}
+        <div class="evidence-field-row">
+          <span class="evidence-field-label" style="color: var(--text-dim);">Grounded CV Facts:</span>
+          <span class="evidence-field-val" style="font-size: 11px; color: var(--text-muted);">{{ pr.supporting_cv_evidence }}</span>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Section 4: Nine-Point Quality Gate Audit Checklist -->
+      <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.65rem; flex-wrap: wrap; gap: 0.35rem;">
+          <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);">
+            4. Nine-Point Personalization Quality Gate Audit
+          </div>
+          <span style="font-size: 11px; font-family: var(--font-mono); color: var(--text-dim);">Stage 5 Quality Gate</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          {% for check_key, check_title, check_desc in qg_meta %}
+            {% set has_key = (check_key in qg_checks) %}
+            {% set check_val = qg_checks[check_key] if has_key else None %}
+            <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.5rem 0.65rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+              <div style="min-width: 0; flex: 1;">
+                <div style="font-weight: 600; font-size: 12px; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                  <span>{{ check_title }}</span>
+                  <code style="font-size: 10px; color: var(--text-dim); font-weight: normal;">{{ check_key }}</code>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 1px;">
+                  {{ check_desc }}
+                </div>
+              </div>
+              <div style="flex-shrink: 0;">
+                {% if has_key and check_val == True %}
+                  <span class="badge badge-success" style="font-size: 10px; padding: 2px 7px;"><span class="badge-dot"></span>PASS</span>
+                {% elif has_key and check_val == False %}
+                  <span class="badge badge-danger" style="font-size: 10px; padding: 2px 7px;"><span class="badge-dot"></span>FLAGGED</span>
+                {% else %}
+                  <span class="badge badge-neutral" style="font-size: 10px; padding: 2px 7px;"><span class="badge-dot"></span>UNVERIFIED</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <!-- Discrepancies & Limitations / Caveats -->
+        {% if pr.contact_discrepancies %}
+        <div style="margin-top: 0.65rem; background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: var(--radius-sm); padding: 0.5rem 0.65rem;">
+          <div style="font-weight: 600; font-size: 11px; color: #d97706; margin-bottom: 2px;">Contact Resolution Audit Discrepancies:</div>
+          {% for disc in pr.contact_discrepancies %}
+            <div style="font-size: 11px; color: var(--text-secondary);">
+              <strong>{{ disc.field_name|capitalize }}:</strong> resolved to <code>{{ disc.resolved_value }}</code> (profile: <code>{{ disc.profile_value }}</code>{% if disc.cv_value %}, CV: <code>{{ disc.cv_value }}</code>{% endif %})
+            </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if pr.limitations_or_assumptions %}
+        <div style="margin-top: 0.5rem; font-size: 11px; color: var(--text-dim);">
+          <strong>Assumptions / Caveats:</strong> {{ pr.limitations_or_assumptions|join('; ') }}
+        </div>
+        {% endif %}
       </div>
     </div>
 

@@ -234,65 +234,69 @@
     </div>
 
     <!-- Mutually Exclusive Row Outcomes -->
-    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 0.5rem; font-family: var(--font-mono);">
-      Row Outcomes (Mutually Exclusive Breakdown)
+    <div class="validation-section-header">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>Row Outcomes &mdash; Mutually Exclusive Breakdown</span>
     </div>
     <div class="validation-summary-grid">
-      <div class="val-stat-card" style="border-left: 3px solid var(--success);">
+      <div class="val-stat-card stat-success">
         <span class="val-stat-label">Valid Contacts</span>
-        <span class="val-stat-val" id="valCountValid" style="color:var(--success);">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Will be processed</span>
+        <span class="val-stat-val" id="valCountValid" style="color:var(--color-success);">0</span>
+        <span class="val-stat-desc">Will be processed</span>
       </div>
-      <div class="val-stat-card" style="border-left: 3px solid var(--danger);">
+      <div class="val-stat-card stat-danger">
         <span class="val-stat-label">Syntax Errors</span>
-        <span class="val-stat-val" id="valCountSyntax" style="color:var(--danger);">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Malformed email format</span>
+        <span class="val-stat-val" id="valCountSyntax" style="color:var(--color-danger);">0</span>
+        <span class="val-stat-desc">Malformed email format</span>
       </div>
-      <div class="val-stat-card" style="border-left: 3px solid var(--danger);">
+      <div class="val-stat-card stat-danger">
         <span class="val-stat-label">Missing Emails</span>
-        <span class="val-stat-val" id="valCountMissing" style="color:var(--danger);">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Empty email field</span>
+        <span class="val-stat-val" id="valCountMissing" style="color:var(--color-danger);">0</span>
+        <span class="val-stat-desc">Empty email field</span>
       </div>
-      <div class="val-stat-card" style="border-left: 3px solid var(--warning);">
+      <div class="val-stat-card stat-warning">
         <span class="val-stat-label">Duplicates</span>
-        <span class="val-stat-val" id="valCountDuplicate" style="color:var(--warning);">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Repeated in file</span>
+        <span class="val-stat-val" id="valCountDuplicate" style="color:var(--color-warning);">0</span>
+        <span class="val-stat-desc">Repeated in file</span>
       </div>
     </div>
 
     <!-- Informational Overlapping Checks -->
-    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 0.5rem; font-family: var(--font-mono);">
-      Data Quality Context (Informational / Overlapping)
+    <div class="validation-section-header">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>Data Quality Context &mdash; Informational / Overlapping</span>
     </div>
     <div class="validation-summary-grid">
       <div class="val-stat-card">
         <span class="val-stat-label">Missing Company</span>
         <span class="val-stat-val" id="valCountNoCompany">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Preserved for research</span>
+        <span class="val-stat-desc">Preserved for research</span>
       </div>
       <div class="val-stat-card">
         <span class="val-stat-label">Missing Name</span>
         <span class="val-stat-val" id="valCountNoName">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Uses team greeting</span>
+        <span class="val-stat-desc">Uses team greeting</span>
       </div>
-      <div class="val-stat-card">
+      <div class="val-stat-card stat-info">
         <span class="val-stat-label">Free Email Domains</span>
-        <span class="val-stat-val" id="valCountFreeProvider" style="color:var(--info);">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">gmail.com, etc.</span>
+        <span class="val-stat-val" id="valCountFreeProvider" style="color:var(--color-info);">0</span>
+        <span class="val-stat-desc">gmail.com, etc.</span>
       </div>
       <div class="val-stat-card">
         <span class="val-stat-label">Total Data Rows</span>
         <span class="val-stat-val" id="valCountTotal">0</span>
-        <span style="font-size:10px; color:var(--text-dim); margin-top:2px;">Excluding empty rows</span>
+        <span class="val-stat-desc">Excluding empty rows</span>
       </div>
     </div>
 
-    <div class="alert alert-info" style="margin-bottom:0;">
-      <div>
-        <strong>Validation Scope &amp; Integrity Notice:</strong>
-        <div style="font-size: 12px; margin-top: 3px; line-height: 1.4;">
-          A syntactically valid email is not proof that the mailbox exists or that the recruiter is currently active. Contacts with missing company names or recruiter names are <strong>not discarded</strong>; they remain available for review and automated research. Duplicate emails within the spreadsheet are skipped to protect outreach reputation.
-        </div>
+    <!-- Compact, Readable Validation Notice -->
+    <div class="validation-notice">
+      <div class="validation-notice-icon">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      </div>
+      <div class="validation-notice-body">
+        <span class="validation-notice-title">Validation Scope &amp; Integrity Notice</span>
+        Syntax verification does not guarantee active mailboxes. Missing company names or recruiter names are <strong>not discarded</strong>; they remain available for automated domain research and human review. Duplicate emails within the spreadsheet are skipped to protect sender reputation.
       </div>
     </div>
   </div>
@@ -388,11 +392,11 @@
     </div>
 
     <!-- Production Email-Sending Safeguard Notice -->
-    <div class="card" style="border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.04); margin-bottom: 1.5rem;">
+    <div class="card" style="border-color: rgba(22, 163, 74, 0.3); background: rgba(22, 163, 74, 0.04); margin-bottom: 1.5rem;">
       <div style="display:flex; align-items:flex-start; gap:0.75rem;">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" style="flex-shrink:0; margin-top:2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" style="flex-shrink:0; margin-top:2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         <div style="font-size:12px; line-height:1.5;">
-          <strong style="color:#4ade80; display:block; font-size:13px; margin-bottom:2px;">Outreach Safeguards Active</strong>
+          <strong style="color:var(--success); display:block; font-size:13px; margin-bottom:2px;">Outreach Safeguards Active</strong>
           Dry-run mode is strictly enforced. After batch processing completes, all generated drafts will be deposited in the <strong>Review Queue</strong> for mandatory human inspection and approval.
         </div>
       </div>

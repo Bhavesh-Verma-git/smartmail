@@ -7,6 +7,8 @@ and Tailored CV Mode (optional secondary).
 from __future__ import annotations
 
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMod
 from src.outreach.send_log import SendLog
 from src.profile.loader import load_profile
 from src.profile.validator import assert_valid_profile
+from src.research.cache import CachedResearchProvider, ResearchCache
 from src.research.checks import _is_http_url
 from src.research.models import ResearchInput
 from src.research.researcher import build_research_input, research_contact
@@ -109,6 +112,8 @@ class OutreachWorkflow:
             # Ensure the master profile is valid
             assert_valid_profile(self.profile)
 
+        self._lock = threading.RLock()
+        self.research_cache: ResearchCache = ResearchCache()
         self._mode = default_mode
         self._uploaded_cv_path: Path | None = None
         self._uploaded_cv_hash: str | None = None
@@ -143,7 +148,8 @@ class OutreachWorkflow:
 
     def set_mode(self, mode: WorkflowMode) -> None:
         """Switch workflow mode between Uploaded CV and Tailored CV."""
-        self._mode = mode
+        with self._lock:
+            self._mode = mode
 
     # -----------------------------------------------------------------------
     # Uploaded CV Safeguards
@@ -153,15 +159,18 @@ class OutreachWorkflow:
         """
         Register the existing CV file for Uploaded CV Mode.
         Computes SHA-256 hash and caches bytes to guarantee byte-for-byte preservation.
+        Pre-caches text representation thread-safely.
         """
-        p = Path(file_path).resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Uploaded CV file not found at: {file_path}")
-        
-        file_bytes = p.read_bytes()
-        self._uploaded_cv_path = p
-        self._uploaded_cv_original_bytes = file_bytes
-        self._uploaded_cv_hash = hashlib.sha256(file_bytes).hexdigest()
+        with self._lock:
+            p = Path(file_path).resolve()
+            if not p.exists():
+                raise FileNotFoundError(f"Uploaded CV file not found at: {file_path}")
+            
+            file_bytes = p.read_bytes()
+            self._uploaded_cv_path = p
+            self._uploaded_cv_original_bytes = file_bytes
+            self._uploaded_cv_hash = hashlib.sha256(file_bytes).hexdigest()
+            self._cached_cv_text = self._extract_cv_text_from_path(p)
 
     @property
     def uploaded_cv_path(self) -> Path | None:
@@ -181,30 +190,33 @@ class OutreachWorkflow:
             and current_hash == self._uploaded_cv_hash
         )
 
+    def _extract_cv_text_from_path(self, p: Path) -> str:
+        text = ""
+        try:
+            if p.suffix.lower() == ".pdf":
+                import pypdf
+                reader = pypdf.PdfReader(str(p))
+                pages_text = [page.extract_text() or "" for page in reader.pages]
+                text = "\n".join(pages_text)
+            else:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        return text
+
     def get_uploaded_cv_text(self) -> str:
         """
         Extract text from the registered uploaded CV for dynamic skill matching.
-        Does not alter the file. Caches text in memory.
+        Does not alter the file. Caches text in memory thread-safely.
         """
-        if not self._uploaded_cv_path or not self._uploaded_cv_path.exists():
-            return ""
-        if self._cached_cv_text is not None:
+        with self._lock:
+            if not self._uploaded_cv_path or not self._uploaded_cv_path.exists():
+                return ""
+            if self._cached_cv_text is not None:
+                return self._cached_cv_text
+
+            self._cached_cv_text = self._extract_cv_text_from_path(self._uploaded_cv_path)
             return self._cached_cv_text
-
-        text = ""
-        try:
-            if self._uploaded_cv_path.suffix.lower() == ".pdf":
-                import pypdf
-                reader = pypdf.PdfReader(str(self._uploaded_cv_path))
-                pages_text = [p.extract_text() or "" for p in reader.pages]
-                text = "\n".join(pages_text)
-            else:
-                text = self._uploaded_cv_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            text = ""
-
-        self._cached_cv_text = text
-        return text
 
     # -----------------------------------------------------------------------
     # Execution
@@ -221,7 +233,7 @@ class OutreachWorkflow:
         """
         Execute the workflow for a single contact record.
         """
-        company_name = contact.company_name or "Unknown Company"
+        company_name = (contact.company_name or "").strip()
         recipient_email = contact.email_result.normalized_email
         contact_name = contact.contact_name
         website = contact.website
@@ -251,6 +263,10 @@ class OutreachWorkflow:
             research_result = research_provider.research(res_input)
         else:
             research_result = research_contact(res_input, provider=research_provider)
+
+        # Resolve company name from domain research if not explicitly supplied in contact record
+        if not company_name and getattr(research_result, "resolved_company_name", ""):
+            company_name = research_result.resolved_company_name
 
         # 2. Company & Contact Verification + Role Relevance (Stage 4)
         cv_text = self.get_uploaded_cv_text()
@@ -522,6 +538,7 @@ class OutreachWorkflow:
         research_provider: Any = None,
         custom_output_dir: str | Path | None = None,
         dry_run: bool | None = None,
+        max_workers: int = 4,
         **kwargs: Any,
     ) -> BatchResult:
         """
@@ -541,6 +558,8 @@ class OutreachWorkflow:
             research_provider=research_provider,
             custom_output_dir=custom_output_dir,
             dry_run=dry_run,
+            max_workers=max_workers,
+            **kwargs,
         )
 
     def process_import_result(
@@ -551,13 +570,16 @@ class OutreachWorkflow:
         research_provider: Any = None,
         custom_output_dir: str | Path | None = None,
         dry_run: bool | None = None,
+        max_workers: int = 4,
         **kwargs: Any,
     ) -> BatchResult:
         """
         Process an arbitrary ImportResult (from CSV, XLSX, or XLS) in batch.
 
         - Records malformed/duplicate rows in failed_count and errors.
-        - Processes each valid contact through process_contact.
+        - Uses bounded concurrency with ThreadPoolExecutor (default 4 workers).
+        - Caches public company research safely via CachedResearchProvider.
+        - Preserves strict CSV row order in the output.
         - Continues processing subsequent contacts if one contact fails.
         - Enforces duplicate prevention across persistent send_log.
         - Gathers review queue and separate counts.
@@ -565,106 +587,155 @@ class OutreachWorkflow:
         """
         if dry_run is not None:
             self.sender.dry_run = dry_run
+
+        raw_valid = getattr(import_result, "valid_contacts", None)
+        raw_contacts = getattr(import_result, "contacts", None)
+        if isinstance(raw_valid, (list, tuple)) and raw_valid:
+            contacts = list(raw_valid)
+        elif isinstance(raw_contacts, (list, tuple)) and raw_contacts:
+            contacts = list(raw_contacts)
+        elif isinstance(raw_valid, (list, tuple)):
+            contacts = list(raw_valid)
+        elif isinstance(raw_contacts, (list, tuple)):
+            contacts = list(raw_contacts)
+        else:
+            contacts = list(raw_valid or raw_contacts or [])
+
+        raw_errors = getattr(import_result, "errors", [])
+        errors = list(raw_errors) if isinstance(raw_errors, (list, tuple)) else []
+
         batch = BatchResult(
-            total_rows=len(import_result.contacts) + len(import_result.errors)
+            total_rows=len(contacts) + len(errors)
         )
 
         # Record import errors (syntax-invalid, duplicate within CSV, missing email)
-        for err in import_result.errors:
+        for err in errors:
             batch.failed_count += 1
             batch.errors.append({
                 "row_number": err.row_number,
-                "raw_row": err.raw_row,
-                "reason": err.reason,
+                "raw_row": getattr(err, "raw_row", {}),
+                "reason": getattr(err, "reason", "Import validation error"),
             })
 
-        # Process valid contacts sequentially
-        for contact in import_result.contacts:
+        caching_provider = research_provider
+        if not isinstance(research_provider, CachedResearchProvider):
+            inner = research_provider if research_provider is not None else None
+            if inner is None:
+                from src.research.providers import get_default_research_provider
+                inner = get_default_research_provider()
+            caching_provider = CachedResearchProvider(inner, cache=self.research_cache)
+
+        def _process_one_contact(idx: int, contact: Any) -> WorkflowResult:
             recipient = contact.email_result.normalized_email
 
             # Check if this recipient was already sent an email in this campaign
-            if self.send_log.was_successfully_sent(recipient, self.campaign_id) or (self.sender.dry_run and self.send_log.was_simulated(recipient, self.campaign_id)):
-                blocked_res = WorkflowResult(
+            if self.send_log.was_successfully_sent(recipient, self.campaign_id) or (
+                self.sender.dry_run and self.send_log.was_simulated(recipient, self.campaign_id)
+            ):
+                return WorkflowResult(
                     mode=self._mode,
                     contact_email=recipient,
-                    company_name=contact.company_name or "Unknown Company",
+                    company_name=getattr(contact, "company_name", "") or "",
                     status=BLOCKED,
                     message=f"Duplicate send prevented: Email already sent to {recipient}.",
-                    row_number=contact.row_number,
+                    row_number=getattr(contact, "row_number", idx + 1),
                     contact=contact,
                 )
-                batch.processed_count += 1
-                batch.blocked_count += 1
-                batch.results.append(blocked_res)
-                continue
 
             try:
                 wf_res = self.process_contact(
                     contact=contact,
                     job_description=job_description,
                     target_role=target_role,
-                    research_provider=research_provider,
+                    research_provider=caching_provider,
                     custom_output_dir=custom_output_dir,
                 )
-                batch.processed_count += 1
-                batch.results.append(wf_res)
-
-                # Track Stage 3 classification outcomes
-                if wf_res.classification is not None:
-                    outcome = wf_res.classification.primary_outcome
-                    if outcome == "CONFIDENT":
-                        batch.confident_count += 1
-                    elif outcome == "REVIEW_NAME":
-                        batch.review_name_count += 1
-                    elif outcome == "NOT_AI_RELEVANT":
-                        batch.not_ai_relevant_count += 1
-                    elif outcome == "ELIMINATED":
-                        batch.eliminated_count += 1
-                    else:
-                        batch.other_review_count += 1
-
-                if wf_res.status == BLOCKED:
-                    batch.blocked_count += 1
-                elif wf_res.status in ("REVIEW", "PROCEED"):
-                    if wf_res.draft is not None:
-                        batch.drafted_count += 1
-                        gen_st = getattr(wf_res.draft, "generation_status", "DRAFT_GENERATED")
-                        if gen_st == "DRAFT_GENERATED":
-                            batch.draft_generated_count += 1
-                        elif gen_st == "NEEDS_REVIEW":
-                            batch.needs_review_count += 1
-                        else:
-                            batch.generation_failed_count += 1
-                    if wf_res.status == "REVIEW":
-                        batch.review_required_count += 1
-                        batch.review_queue.append(wf_res)
-                elif wf_res.status == "ERROR":
-                    batch.failed_count += 1
-                    batch.generation_failed_count += 1
-                    batch.errors.append({
-                        "row_number": contact.row_number,
-                        "email": recipient,
-                        "error": wf_res.error or wf_res.message,
-                    })
-
+                return wf_res
             except Exception as exc:
-                batch.processed_count += 1
-                batch.failed_count += 1
-                err_res = WorkflowResult(
+                return WorkflowResult(
                     mode=self._mode,
                     contact_email=recipient,
-                    company_name=contact.company_name or "Unknown Company",
+                    company_name=getattr(contact, "company_name", "") or "",
                     status="ERROR",
                     message=f"Error processing contact: {exc}",
                     error=str(exc),
-                    row_number=contact.row_number,
+                    row_number=getattr(contact, "row_number", idx + 1),
                     contact=contact,
                 )
-                batch.results.append(err_res)
+
+        completed_items: list[tuple[int, WorkflowResult]] = []
+        worker_count = max(1, min(max_workers, 16))
+
+        if worker_count <= 1 or len(contacts) <= 1:
+            for idx, contact in enumerate(contacts):
+                completed_items.append((idx, _process_one_contact(idx, contact)))
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_to_idx = {
+                    executor.submit(_process_one_contact, i, c): i
+                    for i, c in enumerate(contacts)
+                }
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        res = future.result()
+                    except Exception as fatal_exc:
+                        contact_ref = contacts[idx]
+                        res = WorkflowResult(
+                            mode=self._mode,
+                            contact_email=getattr(contact_ref.email_result, "normalized_email", "unknown"),
+                            company_name=getattr(contact_ref, "company_name", "") or "",
+                            status="ERROR",
+                            message=f"Unexpected error: {fatal_exc}",
+                            error=str(fatal_exc),
+                            row_number=getattr(contact_ref, "row_number", idx + 1),
+                            contact=contact_ref,
+                        )
+                    completed_items.append((idx, res))
+
+        # Preserve exact CSV row order
+        completed_items.sort(key=lambda x: x[0])
+
+        for _, wf_res in completed_items:
+            batch.processed_count += 1
+            batch.results.append(wf_res)
+
+            # Track Stage 3 classification outcomes
+            if wf_res.classification is not None:
+                outcome = wf_res.classification.primary_outcome
+                if outcome == "CONFIDENT":
+                    batch.confident_count += 1
+                elif outcome == "REVIEW_NAME":
+                    batch.review_name_count += 1
+                elif outcome == "NOT_AI_RELEVANT":
+                    batch.not_ai_relevant_count += 1
+                elif outcome == "ELIMINATED":
+                    batch.eliminated_count += 1
+                else:
+                    batch.other_review_count += 1
+
+            if wf_res.status == BLOCKED:
+                batch.blocked_count += 1
+            elif wf_res.status in ("REVIEW", "PROCEED"):
+                if wf_res.draft is not None:
+                    batch.drafted_count += 1
+                    gen_st = getattr(wf_res.draft, "generation_status", "DRAFT_GENERATED")
+                    if gen_st == "DRAFT_GENERATED":
+                        batch.draft_generated_count += 1
+                    elif gen_st == "NEEDS_REVIEW":
+                        batch.needs_review_count += 1
+                    else:
+                        batch.generation_failed_count += 1
+                if wf_res.status == "REVIEW":
+                    batch.review_required_count += 1
+                    batch.review_queue.append(wf_res)
+            elif wf_res.status == "ERROR":
+                batch.failed_count += 1
+                batch.generation_failed_count += 1
                 batch.errors.append({
-                    "row_number": contact.row_number,
-                    "email": recipient,
-                    "error": str(exc),
+                    "row_number": wf_res.row_number,
+                    "email": wf_res.contact_email,
+                    "error": wf_res.error or wf_res.message,
                 })
 
         return batch

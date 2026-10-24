@@ -35,6 +35,52 @@ class GenerationStatus(str, Enum):
 
 
 @dataclass
+class PersonalizationRecord:
+    """
+    Internal audit record detailing why an outreach email was personalized.
+    """
+    company_finding: str = ""
+    evidence_source_url: str = ""
+    evidence_source_title: str = ""
+    source_excerpt: str = ""
+    candidate_experience: str = ""
+    connection_reasoning: str = ""
+    technical_domain: str = ""
+    supporting_cv_evidence: str = ""
+    limitations_or_assumptions: list[str] = field(default_factory=list)
+    contact_discrepancies: list[dict[str, Any]] = field(default_factory=list)
+    unresolved_caveats: list[str] = field(default_factory=list)
+    quality_gate_passed: bool = True
+    quality_gate_checks: dict[str, bool] = field(default_factory=dict)
+    quality_gate_notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        from dataclasses import asdict
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PersonalizationRecord:
+        if not data or not isinstance(data, dict):
+            return cls()
+        return cls(
+            company_finding=data.get("company_finding", ""),
+            evidence_source_url=data.get("evidence_source_url", ""),
+            evidence_source_title=data.get("evidence_source_title", ""),
+            source_excerpt=data.get("source_excerpt", ""),
+            candidate_experience=data.get("candidate_experience", ""),
+            connection_reasoning=data.get("connection_reasoning", ""),
+            technical_domain=data.get("technical_domain", ""),
+            supporting_cv_evidence=data.get("supporting_cv_evidence", ""),
+            limitations_or_assumptions=data.get("limitations_or_assumptions", []),
+            contact_discrepancies=data.get("contact_discrepancies", []),
+            unresolved_caveats=data.get("unresolved_caveats", []),
+            quality_gate_passed=data.get("quality_gate_passed", True),
+            quality_gate_checks=data.get("quality_gate_checks", {}),
+            quality_gate_notes=data.get("quality_gate_notes", []),
+        )
+
+
+@dataclass
 class EmailDraft:
     """
     Structured outreach draft for human review and approval.
@@ -60,6 +106,7 @@ class EmailDraft:
         matched_skills: Candidate skills matched to company work.
         matched_projects: Specific CV projects highlighted in the email.
         recipient_type: Categorization of recipient (individual, generic_inbox, unknown).
+        personalization_record: Structured reasoning and quality gate audit details.
     """
     draft_id: str
     recipient: str
@@ -81,6 +128,7 @@ class EmailDraft:
     matched_skills: list[str] = field(default_factory=list)
     matched_projects: list[str] = field(default_factory=list)
     recipient_type: str = "individual"
+    personalization_record: PersonalizationRecord | None = None
 
 
 

@@ -9,6 +9,7 @@ from src.outreach.mailer import (
     DuplicateSendError,
     EmailReviewManager,
     EmailSender,
+    get_sender_address,
 )
 from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMode
 
@@ -21,6 +22,7 @@ __all__ = [
     "draft_outreach_email",
     "EmailReviewManager",
     "EmailSender",
+    "get_sender_address",
     "ApprovalRequiredError",
     "DuplicateSendError",
 ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,12 +36,22 @@ def _now_iso() -> str:
 
 
 def _atomic_write_json(file_path: Path, data: Any) -> None:
-    """Atomically write JSON data to file_path via a temporary file and atomic replace."""
+    """Atomically write JSON data to file_path via a temporary file and atomic replace with Windows retry."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temp_file = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4().hex[:8]}")
+    payload = json.dumps(data, indent=2)
     try:
-        temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(temp_file, file_path)
+        temp_file.write_text(payload, encoding="utf-8")
+        for attempt in range(5):
+            try:
+                os.replace(temp_file, file_path)
+                break
+            except OSError:
+                if attempt < 4:
+                    time.sleep(0.015 * (attempt + 1))
+                else:
+                    file_path.write_text(payload, encoding="utf-8")
+                    break
     finally:
         if temp_file.exists():
             try:
@@ -220,9 +231,13 @@ def save_draft_record(
         "matched_skills": getattr(draft, "matched_skills", []),
         "matched_projects": getattr(draft, "matched_projects", []),
         "recipient_type": getattr(draft, "recipient_type", "individual"),
+        "personalization_record": draft.personalization_record.to_dict() if hasattr(getattr(draft, "personalization_record", None), "to_dict") else (draft.personalization_record if isinstance(getattr(draft, "personalization_record", None), dict) else {}),
     }
     _atomic_write_json(file_path, data)
     return file_path
+
+
+save_draft = save_draft_record
 
 
 def get_draft(draft_id: str) -> dict[str, Any] | None:
@@ -401,6 +416,113 @@ def update_draft_status(draft_id: str, status: str) -> dict[str, Any]:
         raise KeyError(f"Draft '{draft_id}' not found.")
     draft_data["status"] = status
     draft_data["updated_at"] = _now_iso()
+    file_path = _DRAFTS_DIR / f"{draft_id}.json"
+    _atomic_write_json(file_path, draft_data)
+    return draft_data
+
+
+def regenerate_draft_content(
+    draft_id: str,
+    profile_path: str | Path = "data/master_profile.json",
+    send_log: SendLog | None = None,
+) -> dict[str, Any]:
+    """
+    Regenerate the email draft subject, body, and personalization record
+    based on the draft's verified research evidence and profile.
+    """
+    draft_data = get_draft(draft_id)
+    if not draft_data:
+        raise KeyError(f"Draft '{draft_id}' not found.")
+
+    from src.profile.loader import load_profile
+    from src.research.models import ResearchResult, EvidenceItem, RETRIEVAL_OK
+    from src.outreach.drafting import draft_outreach_email
+    from src.outreach.models import WorkflowMode
+    from src.verification.models import PipelineResult, VerificationResult, MatchResult, RELEVANT, GENERAL_INQUIRY, PROCEED
+
+    profile = load_profile(profile_path)
+
+    # Reconstruct evidence items
+    evidence = []
+    for ev in draft_data.get("research_evidence", []):
+        evidence.append(EvidenceItem(
+            source_url=ev.get("source_url", ""),
+            source_type=ev.get("source_type", "web_page"),
+            title=ev.get("title", ""),
+            extracted_text=ev.get("extracted_text", ""),
+            retrieval_status=RETRIEVAL_OK,
+            supports=ev.get("supports", []),
+        ))
+
+    summary = draft_data.get("evidence_summary", [])
+    comp = draft_data.get("company_name", "")
+    email = draft_data.get("recipient", "")
+    v_info = draft_data.get("verification", {})
+    matched_areas = v_info.get("matched_areas", [])
+
+    rr = ResearchResult(
+        company_name=comp,
+        resolved_company_name=comp,
+        evidence=evidence,
+        ai_ml_evidence_summary=summary,
+    )
+
+    verif_res = PipelineResult(
+        verification=VerificationResult(
+            company_status=v_info.get("company_identity_status", "REVIEW"),
+            overall_status=PROCEED if v_info.get("company_identity_status") != "BLOCKED" else "BLOCKED",
+            evidence_sources=v_info.get("source_urls", []),
+        ),
+        match=MatchResult(
+            relevance_status=v_info.get("relevance_status", RELEVANT),
+            case_type=v_info.get("role_status", GENERAL_INQUIRY),
+            matched_areas=matched_areas,
+        ),
+    )
+
+    mode = WorkflowMode.TAILORED_CV if draft_data.get("mode") == "tailored_cv" else WorkflowMode.UPLOADED_CV
+
+    new_draft = draft_outreach_email(
+        profile=profile,
+        recipient_email=email,
+        company_name=comp,
+        contact_name=draft_data.get("recipient_name", ""),
+        verification_pipeline_result=verif_res,
+        mode=mode,
+        attachment_path=draft_data.get("attachment_path", ""),
+        research_result=rr,
+    )
+
+    draft_data["subject"] = new_draft.subject
+    draft_data["body"] = new_draft.body
+    draft_data["generation_status"] = new_draft.generation_status
+    draft_data["personalization_explanation"] = new_draft.personalization_explanation
+    draft_data["matched_skills"] = new_draft.matched_skills
+    draft_data["matched_projects"] = new_draft.matched_projects
+    draft_data["personalization_record"] = new_draft.personalization_record.to_dict() if new_draft.personalization_record else {}
+    draft_data["review_required"] = new_draft.review_required
+    draft_data["review_flags"] = new_draft.review_flags
+    draft_data["approved"] = False
+    draft_data["status"] = "DRAFT"
+    draft_data["updated_at"] = _now_iso()
+    draft_data["generation_version"] = draft_data.get("generation_version", 1) + 1
+
+    reg_history = draft_data.get("regeneration_history", [])
+    reg_history.append({
+        "version": draft_data["generation_version"],
+        "timestamp": draft_data["updated_at"],
+        "quality_gate_passed": new_draft.personalization_record.quality_gate_passed if new_draft.personalization_record else True,
+        "company_finding": new_draft.personalization_record.company_finding if new_draft.personalization_record else "",
+    })
+    draft_data["regeneration_history"] = reg_history
+
+    sl = send_log or SendLog()
+    sl.record_draft(
+        draft_id=draft_id,
+        recipient=email,
+        campaign_id=draft_data.get("campaign_id", ""),
+    )
+
     file_path = _DRAFTS_DIR / f"{draft_id}.json"
     _atomic_write_json(file_path, draft_data)
     return draft_data
@@ -639,3 +761,125 @@ def get_launch_readiness_checklist() -> list[dict[str, Any]]:
             "details": "Drafts stored in output/.drafts/, batches in output/.batches/, send log in data/send_log.db. No remote tracking.",
         },
     ]
+
+
+# ---------------------------------------------------------------------------
+# Draft Cleanup & Deletion Operations
+# ---------------------------------------------------------------------------
+
+def delete_draft(draft_id: str, send_log: SendLog | None = None) -> bool:
+    """
+    Safely delete a single draft JSON record and synchronize with SQLite send_log.
+    Guards against path traversal. Preserves SUCCESS send log history.
+    """
+    import re
+    safe_id = Path(draft_id).name
+    if not re.match(r"^[\w\-]+$", safe_id):
+        return False
+
+    fp = (_DRAFTS_DIR / f"{safe_id}.json").resolve()
+    deleted = False
+    try:
+        if fp.is_relative_to(_DRAFTS_DIR.resolve()) and fp.exists():
+            fp.unlink()
+            deleted = True
+    except Exception:
+        pass
+
+    sl = send_log or SendLog()
+    sl_removed = sl.remove_draft_record(safe_id)
+    return deleted or sl_removed
+
+
+def delete_drafts_for_batch(batch_id: str, send_log: SendLog | None = None) -> dict[str, Any]:
+    """
+    Delete all draft JSON records associated with a specific batch/campaign ID.
+    Synchronizes with SQLite send_log while preserving SUCCESS records.
+    """
+    import re
+    safe_batch_id = Path(batch_id).name
+    if not re.match(r"^[\w\-]+$", safe_batch_id):
+        return {"deleted_count": 0, "batch_id": batch_id, "success": False}
+
+    if not _DRAFTS_DIR.exists():
+        return {"deleted_count": 0, "batch_id": batch_id, "success": True}
+
+    deleted_count = 0
+    for fp in _DRAFTS_DIR.glob("*.json"):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            if data.get("campaign_id") == safe_batch_id:
+                fp.unlink()
+                deleted_count += 1
+        except Exception:
+            continue
+
+    sl = send_log or SendLog()
+    sl.remove_batch_records(safe_batch_id)
+
+    # Update batch record metadata if present
+    batch_data = get_batch_record(safe_batch_id)
+    if batch_data:
+        batch_data["drafts_deleted"] = True
+        batch_data["drafts_deleted_at"] = _now_iso()
+        batch_data["drafts_deleted_count"] = deleted_count
+        save_batch_record(safe_batch_id, batch_data)
+
+    return {"deleted_count": deleted_count, "batch_id": safe_batch_id, "success": True}
+
+
+def clear_all_drafts(scope: str = "all", send_log: SendLog | None = None) -> dict[str, Any]:
+    """
+    Clear drafts from output/.drafts/ according to the requested scope.
+
+    Scopes:
+      - 'unapproved': Deletes drafts that are not APPROVED and not SENT.
+      - 'rejected':   Deletes drafts that are marked REJECTED.
+      - 'all':        Deletes all drafts in the working queue.
+
+    Preserves:
+      - Verified company research cache (output/.research_cache/)
+      - Candidate CVs and master profile
+      - SQLite send_log records marked SUCCESS (for duplicate prevention & audit)
+      - Application configuration and session state
+    """
+    if not _DRAFTS_DIR.exists():
+        return {"deleted_count": 0, "scope": scope, "preserved_count": 0}
+
+    deleted_count = 0
+    preserved_count = 0
+
+    for fp in list(_DRAFTS_DIR.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            status = data.get("status", "DRAFT")
+            is_approved = data.get("approved", False)
+
+            should_delete = False
+            if scope == "all":
+                should_delete = True
+            elif scope == "unapproved":
+                should_delete = (not is_approved and status not in ("APPROVED", "SENT", "SIMULATED_SENT"))
+            elif scope == "rejected":
+                should_delete = (status == "REJECTED")
+
+            if should_delete:
+                draft_id = data.get("draft_id") or fp.stem
+                fp.unlink()
+                deleted_count += 1
+                if send_log:
+                    send_log.remove_draft_record(draft_id)
+            else:
+                preserved_count += 1
+        except Exception:
+            continue
+
+    if scope == "all":
+        sl = send_log or SendLog()
+        sl.clear_draft_records(keep_success=True)
+
+    return {
+        "deleted_count": deleted_count,
+        "preserved_count": preserved_count,
+        "scope": scope,
+    }

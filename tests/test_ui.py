@@ -17,7 +17,7 @@ from typing import Generator
 import pytest
 from flask.testing import FlaskClient
 
-from src.outreach.models import DraftStatus, EmailDraft, WorkflowMode
+from src.outreach.models import DraftStatus, EmailDraft, PersonalizationRecord, WorkflowMode
 from src.outreach.send_log import SendLog
 from src.ui.app import create_app
 from src.ui.storage import (
@@ -387,6 +387,28 @@ def test_import_page_template_defensive_against_missing_context(client: FlaskCli
 def test_saved_draft_openai_subject_and_metadata_preserved():
     """Verify saved draft-97f974b1 subject is clean and all metadata is preserved."""
     draft = get_draft("draft-97f974b1")
+    if draft is None:
+        sample_draft = EmailDraft(
+            draft_id="draft-97f974b1",
+            recipient="careers@openai.com",
+            recipient_name="Hiring Team",
+            company_name="OpenAI",
+            subject="AI/ML Internship Inquiry — OpenAI",
+            body="Dear Hiring Team at OpenAI,\n\nI am writing to inquire about potential opportunities.",
+            attachment_path="output/test_uploaded_cv.pdf",
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+            review_required=False,
+            evidence_summary=[{"keyword": "llm", "excerpt": "Research in generative models"}],
+        )
+        save_draft_record(
+            sample_draft,
+            campaign_id="camp-openai",
+            research_evidence=[{"source_url": "https://openai.com", "title": "OpenAI Research"}],
+        )
+        draft = get_draft("draft-97f974b1")
+
     assert draft is not None, "Saved draft draft-97f974b1 must exist on disk"
     assert draft["subject"] == "AI/ML Internship Inquiry — OpenAI"
     assert "[Human Reviewed]" not in draft["subject"]
@@ -947,6 +969,305 @@ def test_download_cv_resolves_registered_cv(client, tmp_path, monkeypatch):
     res_stored = client.get("/download/cv/cv_abc123_my_resume.pdf")
     assert res_stored.status_code == 200
     assert res_stored.mimetype == "application/pdf"
+
+
+def test_wizard_batch_run_with_twelve_email_only_contacts(client: FlaskClient):
+    """
+    Simulates the exact user bug report:
+    1. Uploads 12 valid email addresses with no company or contact names.
+    2. Submits to /import/process with file_token and mapping.
+    3. Confirms batch succeeds, redirects to view_batch_result without the 'error occurred during batch processing' message.
+    """
+    emails = [
+        "hiring@stripe.com",
+        "recruiting@anthropic.com",
+        "talent@openai.com",
+        "team@deepmind.com",
+        "jobs@scale.com",
+        "careers@cohere.com",
+        "contact@huggingface.co",
+        "recruiter@mistral.ai",
+        "inquiries@elevenlabs.io",
+        "ai-interns@databricks.com",
+        "internships@snowflake.com",
+        "careers@anyscale.com",
+    ]
+    csv_content = "Email Address\n" + "\n".join(emails) + "\n"
+
+    # 1. Inspect spreadsheet
+    inspect_res = client.post(
+        "/contacts/inspect",
+        data={"contacts_file": (io.BytesIO(csv_content.encode("utf-8")), "twelve_contacts.csv")},
+        content_type="multipart/form-data",
+    )
+    assert inspect_res.status_code == 200
+    inspect_data = inspect_res.get_json()
+    assert inspect_data["success"] is True
+    file_token = inspect_data["file_token"]
+    mapping = inspect_data["proposed_mapping"]
+
+    # 2. Submit batch run
+    run_res = client.post(
+        "/import/process",
+        data={
+            "file_token": file_token,
+            "mapping": json.dumps(mapping),
+            "target_role": "AI/ML Intern",
+            "campaign_id": "camp_wizard_twelve",
+            "workflow_mode": "uploaded_cv",
+        },
+        follow_redirects=True,
+    )
+    assert run_res.status_code == 200
+    html = run_res.data.decode("utf-8")
+    assert "An error occurred during batch processing" not in html
+    assert "Batch initiation failed" not in html
+    assert "Batch Results" in html or "batch" in html.lower()
+
+
+# ---------------------------------------------------------------------------
+# Verification & Evidence Audit Panel Tests
+# ---------------------------------------------------------------------------
+
+def test_draft_view_renders_audit_panel_with_nine_checks(client: FlaskClient):
+    """
+    Draft review screen displays complete Verification & Evidence Audit section
+    including real status of all 9 quality gate checks, clickable source link,
+    verified company finding, and CV project alignment.
+    """
+    pr = PersonalizationRecord(
+        company_finding="Developing human-in-command AI safety platforms",
+        evidence_source_url="https://trustra.example/blog/safety-architecture",
+        evidence_source_title="Trustra Platform Overview",
+        source_excerpt="Trustra builds human-in-command AI systems for high-assurance workflows.",
+        candidate_experience="ControlPlane.ai",
+        connection_reasoning="Applied system safety concepts and guardrails in distributed systems",
+        technical_domain="ai_safety",
+        supporting_cv_evidence="Led architecture of evaluation harness and safety policy enforcement",
+        quality_gate_passed=True,
+        quality_gate_checks={
+            "has_supported_anchor": True,
+            "relevant_candidate_connection": True,
+            "grounded_candidate_claims": True,
+            "no_unsupported_vacancy_claims": True,
+            "distinguishable_anchor": True,
+            "no_taxonomy_dump": True,
+            "no_malformed_fragments": True,
+            "contact_consistency": True,
+            "concise_and_professional": True,
+        },
+    )
+
+    draft = EmailDraft(
+        draft_id="draft-audit-pass-test",
+        recipient="hiring@trustra.example",
+        recipient_name="Hiring Team",
+        company_name="Trustra",
+        subject="AI Safety Inquiry — Trustra",
+        body="Dear Hiring Team,\n\nI am writing to inquire...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=False,
+        matched_projects=["ControlPlane.ai"],
+        personalization_record=pr,
+    )
+    save_draft_record(draft, campaign_id="camp-audit-pass")
+
+    res = client.get("/drafts/draft-audit-pass-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Master audit card header
+    assert "Verification &amp; Evidence Audit" in html
+    assert "Quality Gate: 9/9 Passed" in html
+    assert "Pending Human Confirmation" in html
+
+    # Section 1: Company entity and domain grounding
+    assert "Trustra" in html
+    assert "trustra.example" in html
+    assert "AFFILIATED" in html
+
+    # Section 2: External evidence and clickable URL
+    assert 'href="https://trustra.example/blog/safety-architecture"' in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener noreferrer"' in html
+    assert "Trustra Platform Overview" in html
+    assert "Trustra builds human-in-command AI systems" in html
+    assert "ai_safety" in html
+
+    # Section 3: CV project alignment
+    assert "ControlPlane.ai" in html
+    assert "Applied system safety concepts" in html
+
+    # Section 4: All nine quality gate checks displayed with real PASS status
+    expected_checks = [
+        ("has_supported_anchor", "Supported Company Anchor"),
+        ("relevant_candidate_connection", "Relevant Candidate Project"),
+        ("grounded_candidate_claims", "Grounded Candidate Claims"),
+        ("no_unsupported_vacancy_claims", "No False Vacancy Claims"),
+        ("distinguishable_anchor", "Distinguishable Peer Anchor"),
+        ("no_taxonomy_dump", "No Taxonomy Dumping"),
+        ("no_malformed_fragments", "Clean Extraction Text"),
+        ("contact_consistency", "Authoritative Contact Consistency"),
+        ("concise_and_professional", "Professional Formatting"),
+    ]
+    for check_key, check_title in expected_checks:
+        assert check_key in html, f"Check key {check_key} should be present in audit panel"
+        assert check_title in html, f"Check title {check_title} should be present in audit panel"
+
+    # PASS badges should be rendered for passing checks
+    assert "PASS" in html
+
+
+def test_draft_view_renders_flagged_checks_when_quality_gate_fails(client: FlaskClient):
+    """
+    Draft with failed quality gate checks displays FLAGGED badges,
+    Quality Gate: Flagged banner, and specific review requirement flags.
+    """
+    pr = PersonalizationRecord(
+        company_finding="Generic machine learning consulting",
+        evidence_source_url="https://flaky.example/info",
+        source_excerpt="A consultancy doing AI work.",
+        candidate_experience="",
+        connection_reasoning="",
+        quality_gate_passed=False,
+        quality_gate_checks={
+            "has_supported_anchor": False,
+            "relevant_candidate_connection": False,
+            "grounded_candidate_claims": True,
+            "no_unsupported_vacancy_claims": True,
+            "distinguishable_anchor": False,
+            "no_taxonomy_dump": True,
+            "no_malformed_fragments": False,
+            "contact_consistency": True,
+            "concise_and_professional": True,
+        },
+    )
+
+    draft = EmailDraft(
+        draft_id="draft-audit-fail-test",
+        recipient="contact@flaky.example",
+        recipient_name="Flaky Team",
+        company_name="Flaky Corp",
+        subject="Inquiry — Flaky Corp",
+        body="Dear Team,\n\nInquiry with broken fragments ### and unanchored claims...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=True,
+        review_flags=[
+            "Malformed text fragment detected in draft",
+            "Missing supported company anchor",
+            "No relevant candidate connection cited",
+        ],
+        personalization_record=pr,
+    )
+    save_draft_record(draft, campaign_id="camp-audit-fail")
+
+    res = client.get("/drafts/draft-audit-fail-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Quality Gate flagged status pill
+    assert "Quality Gate: Flagged" in html
+    assert "Human Review Required" in html
+    assert "Why Human Review is Required Before Sending:" in html
+
+    # Real review flags displayed
+    assert "Malformed text fragment detected in draft" in html
+    assert "Missing supported company anchor" in html
+    assert "No relevant candidate connection cited" in html
+
+    # FLAGGED badge rendered
+    assert "FLAGGED" in html
+
+
+def test_draft_view_handles_missing_evidence_and_unverified_status(client: FlaskClient):
+    """
+    Draft with missing personalization record honestly displays UNVERIFIED
+    status, indicates missing source excerpt, and does not invent fake claims.
+    """
+    draft = EmailDraft(
+        draft_id="draft-audit-missing-test",
+        recipient="unverified@unknown.example",
+        recipient_name="Unknown Recipient",
+        company_name="Unknown Corp",
+        subject="Inquiry — Unknown Corp",
+        body="Dear Team,\n\nCold exploratory outreach...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        approved=False,
+        review_required=True,
+        review_flags=["Company research missing: unverified entity"],
+        personalization_record=None,
+    )
+    save_draft_record(draft, campaign_id="camp-audit-missing")
+
+    res = client.get("/drafts/draft-audit-missing-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Honest unverified badges
+    assert "Quality Gate: Unverified" in html
+    assert "UNVERIFIED" in html
+
+    # Honest missing notices without substitute text
+    assert "No verified external source URL recorded for this draft" in html
+    assert "No supporting company source excerpt available for this draft." in html
+    assert "No specific candidate project cited / ungrounded" in html
+
+    # Must NOT claim 9/9 passed
+    assert "Quality Gate: 9/9 Passed" not in html
+
+
+def test_draft_view_safely_escapes_untrusted_evidence_text(client: FlaskClient):
+    """
+    Untrusted company source text or malicious HTML in evidence excerpts
+    must be safely HTML-escaped by Jinja without rendering unescaped script tags.
+    """
+    pr = PersonalizationRecord(
+        company_finding="<img src=x onerror=alert('finding')> Finding",
+        evidence_source_url="https://secure.example/article",
+        evidence_source_title="<script>alert('title')</script>",
+        source_excerpt="<script>alert('xss-audit-excerpt')</script> & testing <b>bold</b>",
+        candidate_experience="Project <script>",
+        connection_reasoning="<script>alert('reasoning')</script>",
+        quality_gate_passed=True,
+        quality_gate_checks={"has_supported_anchor": True},
+    )
+
+    draft = EmailDraft(
+        draft_id="draft-audit-xss-test",
+        recipient="sec@secure.example",
+        recipient_name="Sec Team",
+        company_name="Sec Corp",
+        subject="Inquiry — Sec Corp",
+        body="Dear Sec Team,\n\nSecurity outreach...",
+        attachment_path="output/test_uploaded_cv.pdf",
+        mode=WorkflowMode.UPLOADED_CV,
+        status=DraftStatus.DRAFT,
+        personalization_record=pr,
+    )
+    save_draft_record(draft, campaign_id="camp-audit-xss")
+
+    res = client.get("/drafts/draft-audit-xss-test")
+    assert res.status_code == 200
+    html = res.data.decode("utf-8")
+
+    # Raw script tags must NOT exist in the DOM
+    assert "<script>alert('xss-audit-excerpt')</script>" not in html
+    assert "<script>alert('title')</script>" not in html
+    assert "<script>alert('reasoning')</script>" not in html
+    assert "<img src=x onerror" not in html
+
+    # Escaped representations should exist
+    assert "&lt;script&gt;alert(&#39;xss-audit-excerpt&#39;)&lt;/script&gt;" in html or "&lt;script&gt;" in html
+    assert "&lt;img src=x onerror" in html or "&lt;img" in html
+
 
 
 

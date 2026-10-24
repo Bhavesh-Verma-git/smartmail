@@ -58,6 +58,8 @@ from src.research.models import (
     NOT_FOUND,
     RETRIEVAL_OK,
     RETRIEVAL_SKIPPED,
+    RETRIEVAL_NETWORK_ERROR,
+    RETRIEVAL_ERROR,
     APPLICATION_UNKNOWN,
 )
 from src.research.providers import HttpPageProvider, ResearchProvider
@@ -213,6 +215,10 @@ def research_contact(
                     f"Candidate website '{cand_url}' discovered from email domain '{inp.registered_domain}'. "
                     "Company identity must be verified from retrieved content."
                 )
+                discovered_item = cand
+                break
+            elif cand.retrieval_status == RETRIEVAL_NETWORK_ERROR:
+                # If network/DNS fails on the candidate host, stop further attempts on dead domain to avoid stalling
                 discovered_item = cand
                 break
             elif discovered_item is None:

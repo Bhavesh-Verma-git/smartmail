@@ -86,14 +86,14 @@
       </div>
 
       <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1.25rem;">
-        Select an existing PDF or DOCX file to use for all future Uploaded CV outreach campaigns.
+        Select an existing PDF file to use for all future Uploaded CV outreach campaigns.
       </p>
 
       <form action="{{ url_for('upload_cv_file_route') }}" method="POST" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
           <label class="form-label">Select CV Document</label>
-          <input type="file" name="cv_file" class="form-control" accept=".pdf,.docx" required>
+          <input type="file" name="cv_file" class="form-control" accept=".pdf,application/pdf" required>
           <div class="form-help">Uploaded file will be validated, hashed, and stored in output/ directory.</div>
         </div>
 

@@ -9,6 +9,10 @@
     <p class="page-subtitle">Real-time pipeline state, batch runs, and pending draft reviews.</p>
   </div>
   <div class="header-actions">
+    <button type="button" class="btn btn-secondary" onclick="openCleanupModal()" title="Manage or clean up saved draft records">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      Manage drafts
+    </button>
     <a href="{{ url_for('import_contacts_page') }}" class="btn btn-primary">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
       New campaign
@@ -91,6 +95,10 @@
     </div>
 
     <div class="header-actions">
+      <button type="button" class="btn btn-secondary btn-sm" onclick="openCleanupModal()" title="Manage or clean up saved draft records">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Manage drafts
+      </button>
       <a href="{{ url_for('review_queue') }}" class="btn btn-secondary btn-sm">
         Full review queue
       </a>
@@ -239,4 +247,138 @@
   }
 </script>
 {% endif %}
+
+<!-- Modal: Draft Cleanup & Queue Management -->
+<div id="cleanupModal" class="modal-backdrop" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+  <div class="card" style="width: 100%; max-width: 540px; margin: 1rem; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-color);">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div style="width: 28px; height: 28px; border-radius: var(--radius-sm); background: rgba(244, 63, 94, 0.12); display: flex; align-items: center; justify-content: center; color: var(--accent);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </div>
+        <h2 class="card-title" style="font-size: 15px; margin: 0; color: var(--text-primary); font-weight: 600;">Manage &amp; Clean Up Drafts</h2>
+      </div>
+      <button type="button" onclick="closeCleanupModal()" style="background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; padding: 0.25rem; line-height: 1;">&times;</button>
+    </div>
+
+    <form action="{{ url_for('cleanup_drafts_route') }}" method="POST" id="cleanupForm" onsubmit="handleCleanupSubmit(event)" style="padding: 1.5rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.5;">
+        Select the scope of working drafts to remove from the local queue. This action permanently deletes working draft files to keep your pipeline clean.
+      </p>
+
+      <div class="form-group" style="margin-bottom: 1.25rem;">
+        <label class="form-label" style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-dim); letter-spacing: 0.05em; display: block; margin-bottom: 0.5rem;">Deletion Scope</label>
+        <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+          <label style="display: flex; align-items: flex-start; gap: 0.6rem; font-size: 13px; color: var(--text-primary); cursor: pointer; padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-subtle); border: 1px solid var(--border-color);" onclick="onScopeChange('unapproved')">
+            <input type="radio" name="scope" value="unapproved" checked style="margin-top: 2px;">
+            <div>
+              <strong>Unapproved drafts only <span style="color: var(--accent); font-weight: normal; font-size: 12px;">({{ stats.needs_review }} pending)</span></strong>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">Deletes pending and review-required drafts. Preserves approved drafts and sent history.</div>
+            </div>
+          </label>
+
+          <label style="display: flex; align-items: flex-start; gap: 0.6rem; font-size: 13px; color: var(--text-primary); cursor: pointer; padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-subtle); border: 1px solid var(--border-color);" onclick="onScopeChange('rejected')">
+            <input type="radio" name="scope" value="rejected" style="margin-top: 2px;">
+            <div>
+              <strong>Rejected / On-Hold drafts only</strong>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">Deletes only drafts explicitly marked rejected during human review.</div>
+            </div>
+          </label>
+
+          {% if stats.recent_batches %}
+          <label style="display: flex; align-items: flex-start; gap: 0.6rem; font-size: 13px; color: var(--text-primary); cursor: pointer; padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-subtle); border: 1px solid var(--border-color);" onclick="onScopeChange('batch')">
+            <input type="radio" name="scope" value="batch" id="scopeBatchRadio" style="margin-top: 2px;">
+            <div style="width: 100%;">
+              <strong>Drafts from a specific batch campaign</strong>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">Remove all drafts created in a chosen import batch run.</div>
+              <div id="batchSelectContainer" style="display: none; margin-top: 0.6rem;">
+                <select name="batch_id" id="cleanupBatchSelect" class="form-control" style="font-size: 12px; padding: 0.4rem 0.6rem; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); width: 100%;">
+                  {% for b in stats.recent_batches %}
+                  <option value="{{ b.batch_id }}">{{ b.campaign_id or b.batch_id[:12] }} — {{ b.drafted_count }} draft(s) ({{ b.saved_at[:10] if b.saved_at else 'recent' }})</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+          </label>
+          {% endif %}
+
+          <label style="display: flex; align-items: flex-start; gap: 0.6rem; font-size: 13px; color: var(--text-primary); cursor: pointer; padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-subtle); border: 1px solid var(--border-color);" onclick="onScopeChange('all')">
+            <input type="radio" name="scope" value="all" style="margin-top: 2px;">
+            <div>
+              <strong style="color: var(--danger);">All drafts (Full Queue Reset) <span style="font-weight: normal; font-size: 12px;">({{ stats.drafts_created }} total)</span></strong>
+              <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">Permanently cleans all local working drafts. Reset queue to a clean slate.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Retention Guarantee Notice -->
+      <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-sm); padding: 0.75rem 0.9rem; font-size: 12px; line-height: 1.5; color: var(--text-secondary); margin-bottom: 1.25rem;">
+        <strong style="color: var(--success); display: block; margin-bottom: 3px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align: -2px; margin-right: 4px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Data Safety Guarantee:
+        </strong>
+        Preserves successful delivery records, uploaded CV &amp; candidate profile, multi-provider API configurations, and research evidence caches. Only draft files are removed.
+      </div>
+
+      <!-- Confirmation Checkbox -->
+      <div style="margin-bottom: 1.25rem; padding: 0.6rem 0.75rem; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 12px; color: var(--text-primary); cursor: pointer; margin: 0;">
+          <input type="checkbox" id="cleanupConfirmCheck" required onchange="updateConfirmButtonState()">
+          <span>I confirm that I want to delete the selected draft files.</span>
+        </label>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 0.75rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+        <button type="button" class="btn btn-secondary" onclick="closeCleanupModal()">Cancel</button>
+        <button type="submit" id="cleanupSubmitBtn" class="btn btn-danger" disabled>Confirm Deletion</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function openCleanupModal() {
+  const m = document.getElementById('cleanupModal');
+  if (m) m.style.display = 'flex';
+  updateConfirmButtonState();
+}
+function closeCleanupModal() {
+  const m = document.getElementById('cleanupModal');
+  if (m) m.style.display = 'none';
+}
+function onScopeChange(scope) {
+  const bSelect = document.getElementById('batchSelectContainer');
+  if (bSelect) {
+    bSelect.style.display = (scope === 'batch') ? 'block' : 'none';
+  }
+}
+function updateConfirmButtonState() {
+  const chk = document.getElementById('cleanupConfirmCheck');
+  const btn = document.getElementById('cleanupSubmitBtn');
+  if (btn && chk) {
+    btn.disabled = !chk.checked;
+  }
+}
+function handleCleanupSubmit(e) {
+  const btn = document.getElementById('cleanupSubmitBtn');
+  const chk = document.getElementById('cleanupConfirmCheck');
+  if (!chk || !chk.checked) {
+    e.preventDefault();
+    return false;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = 'Deleting drafts...';
+  }
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCleanupModal();
+});
+document.getElementById('cleanupModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'cleanupModal') closeCleanupModal();
+});
+</script>
 {% endblock %}
