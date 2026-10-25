@@ -289,6 +289,21 @@ def classify_contact(
         )
 
     # 6. Evaluate recipient identity for companies with confirmed AI/ML relevance
+    # CONFIDENT requires the verification pipeline to have reached PROCEED.
+    # A REVIEW verification (e.g. domain or identity still under review) must
+    # not become CONFIDENT merely because the recipient name is verified.
+    if actual_verification.overall_status != PROCEED:
+        return ContactClassification(
+            primary_outcome=CLASSIFICATION_REVIEW,
+            reason_code=REASON_AI_RELEVANCE_UNCERTAIN,
+            explanation="Company verification is still under review; recipient cannot be marked CONFIDENT yet.",
+            ai_ml_relevance="RELEVANT",
+            recipient_resolution=recipient_resolution,
+            matched_areas=matched_areas,
+            evidence_sources=evidence_sources,
+            limitations=limitations + ["Verification overall status is REVIEW, not PROCEED; held for human review."],
+            is_outreach_ready=False,
+        )
     # Company is verified and AI/ML work is supported!
     # Check recipient:
     if recipient_resolution.name_verification_status == NAME_VERIFIED:

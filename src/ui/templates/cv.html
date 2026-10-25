@@ -6,18 +6,10 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">CV Mode Configuration &amp; Inspection</h1>
-    <p class="page-subtitle">Inspect the byte-level preservation of your uploaded CV or evaluate the algorithmically tailored CV generator.</p>
+    <p class="page-subtitle">Inspect the byte-level preservation of your uploaded CV.</p>
   </div>
 </div>
 
-<div class="tabs tabs-wrapper" style="margin-bottom: 2rem;">
-  <button type="button" class="tab-btn active" data-tab="tabUploaded">
-    Uploaded CV Mode (Default)
-  </button>
-  <button type="button" class="tab-btn" data-tab="tabTailored">
-    Tailored CV Mode (Algorithm)
-  </button>
-</div>
 
 <!-- =========================================================================
      Tab 1: Uploaded CV Mode
@@ -105,111 +97,4 @@
   </div>
 </div>
 
-<!-- =========================================================================
-     Tab 2: Tailored CV Mode
-     ========================================================================= -->
-<div id="tabTailored" class="tab-pane" style="display: none;">
-  <div class="grid-2">
-    <!-- Master Profile & Generator Test Form -->
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Tailored CV Generator Test</h2>
-      </div>
-
-      <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:1.25rem;">
-        Test the algorithm on your candidate profile (<strong>{{ candidate_name }}</strong>) against a target company and role.
-      </p>
-
-      <form action="{{ url_for('test_cv_tailoring_route') }}" method="POST">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-group">
-          <label class="form-label" for="tailorCompany">Target Company</label>
-          <input type="text" id="tailorCompany" name="target_company" class="form-control" value="Acme AI Labs" placeholder="e.g. Acme AI Labs" required>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="tailorRole">Target Role</label>
-          <input type="text" id="tailorRole" name="target_role" class="form-control" value="AI/ML Intern" placeholder="e.g. AI/ML Intern" required>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="tailorJd">Job Description or Technical Keywords</label>
-          <textarea id="tailorJd" name="job_description" class="form-control" rows="3" placeholder="e.g. Python, PyTorch, LLMs, computer vision, distributed systems...">Deep learning models, diffusion pipelines, multimodal AI, PyTorch, scalable inference</textarea>
-        </div>
-
-        <button type="submit" class="btn btn-primary">
-          Run Project Selection &amp; Generate CV
-        </button>
-      </form>
-
-      <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(255,255,255,0.02); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
-        <div style="font-weight: 600; font-size: 0.825rem; color: #818cf8; margin-bottom: 0.35rem;">Algorithm Rules:</div>
-        <ul style="padding-left: 1.25rem; font-size: 0.775rem; color: var(--text-muted); line-height: 1.6;">
-          <li>ControlPlane.ai is strictly pinned in 1st position (base score 100).</li>
-          <li>Two additional projects are selected via keyword and technical relevance scoring.</li>
-          <li>Generates both clean Markdown and high-contrast PDF documents.</li>
-        </ul>
-      </div>
-    </div>
-
-    <!-- Output & Project Selection Inspection -->
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Project Selection &amp; Output Preview</h2>
-        {% if tailored_result and tailored_result.pdf_error %}
-          <span class="badge badge-danger">PDF Error</span>
-        {% elif tailored_result %}
-          <span class="badge badge-success">Generated Successfully</span>
-        {% endif %}
-      </div>
-
-      {% if tailored_result %}
-        <!-- Selected Projects -->
-        <div style="margin-bottom: 1.25rem;">
-          <div class="form-label">Selected Projects for CV:</div>
-          <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.4rem;">
-            {% for p in tailored_result.selected_projects %}
-              <div style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); border-radius: var(--radius-sm); padding: 0.75rem;">
-                <div style="font-weight: 600; color: #fff; font-size: 0.85rem;">
-                  {{ loop.index }}. {{ p.name }}
-                  <span style="float: right; color: #818cf8; font-size: 0.75rem;">Score: {{ p.score }}</span>
-                </div>
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
-                  {{ p.reason }}
-                </div>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-
-        {% if tailored_result.pdf_error %}
-          <div class="alert alert-danger" style="margin-bottom: 1rem;">
-            {{ tailored_result.pdf_error }}
-          </div>
-        {% endif %}
-
-        {% if tailored_result.pdf_path %}
-          <div style="margin-bottom: 1rem;">
-            <a href="{{ url_for('download_cv_file', filename=tailored_result.pdf_filename) }}" class="btn btn-secondary btn-sm" target="_blank">
-              Download Generated PDF ({{ tailored_result.pdf_filename }})
-            </a>
-          </div>
-        {% endif %}
-
-        <div class="form-label">Generated Markdown Content:</div>
-        <pre class="code-preview" style="max-height: 280px;">{{ tailored_result.content }}</pre>
-      {% else %}
-        <div class="empty-state" style="padding: 2rem 1rem;">
-          <div style="width:36px; height:36px; border-radius:var(--radius-sm); background:var(--bg-subtle); border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem auto;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          </div>
-          <div class="empty-title" style="font-size: 14px;">No tailoring run yet</div>
-          <div class="empty-desc" style="font-size: 12px;">
-            Submit the form on the left to run project selection and inspect the output.
-          </div>
-        </div>
-      {% endif %}
-    </div>
-  </div>
-</div>
 {% endblock %}

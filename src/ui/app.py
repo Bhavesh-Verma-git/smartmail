@@ -42,9 +42,6 @@ from src.contacts.spreadsheet_importer import (
     inspect_spreadsheet,
     parse_spreadsheet_contacts,
 )
-from src.cv.generator import generate_tailored_cv
-from src.cv.models import ProjectSelectionResult
-from src.cv.selector import select_projects
 from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMode
 from src.outreach.quality_gate import QUALITY_GATE_CHECKS_METADATA
 from src.outreach.send_log import SendLog
@@ -451,11 +448,22 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         campaign_id = request.form.get("campaign_id", "").strip() or f"camp_{uuid.uuid4().hex[:8]}"
         job_description = request.form.get("job_description", "").strip()
 
-        mode = WorkflowMode.TAILORED_CV if mode_str == "tailored_cv" else WorkflowMode.UPLOADED_CV
+        # Uploaded-CV-only: reject any other mode explicitly instead of
+        # silently coercing a crafted tailored POST into an uploaded run.
+        if mode_str != "uploaded_cv":
+            flash("Tailored-CV mode was removed. Only uploaded-CV batches are supported.", "danger")
+            return redirect(url_for("import_contacts_page"))
+        mode = WorkflowMode.UPLOADED_CV
 
-        # Check uploaded CV availability for Uploaded CV mode
+        # Check uploaded CV availability for Uploaded CV mode.
+        # Fail fast here: previously a missing CV only failed inside
+        # process_contact, after research/verification had already run
+        # for contacts in the batch.
         cv_meta = get_registered_cv_metadata()
         uploaded_cv_path = cv_meta.get("path") if cv_meta.get("exists") else None
+        if not uploaded_cv_path:
+            flash("No CV is registered. Upload a CV before starting a batch (uploaded-CV mode requires one).", "danger")
+            return redirect(url_for("import_contacts_page"))
 
         send_log = _get_send_log()
         stage = "initializing workflow"
@@ -544,7 +552,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         batch = get_batch_record(batch_id)
         if not batch:
             return jsonify({"error": f"Batch '{batch_id}' not found."}), 404
-        status = batch.get("status", "COMPLETED")
+        # Never default an unknown/missing status to COMPLETED: a batch
+        # whose record has no status is UNKNOWN, not finished.
+        status = batch.get("status", "UNKNOWN")
         total = batch.get("total_rows", 0)
         proc = batch.get("processed_count", 0)
         if status == "ERROR":
@@ -776,6 +786,15 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             return redirect(url_for("review_queue"))
 
         send_log = _get_send_log()
+        if draft.get("mode") == "tailored_cv":
+            flash(
+                "This draft was created with the removed tailored-CV mode. "
+                "It cannot be sent or regenerated, and it is not converted to "
+                "an uploaded-CV draft, because its attachment was a generated "
+                "file, not your uploaded CV.",
+                "danger",
+            )
+            return redirect(url_for("view_draft", draft_id=draft_id))
         mode = WorkflowMode(draft.get("mode", "uploaded_cv"))
 
         # Initialize workflow with dry_run=True (Safety default unless explicitly configured)
@@ -801,6 +820,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             mode=mode,
             status=DraftStatus(draft.get("status", "DRAFT")),
             approved=draft.get("approved", False),
+            approval_hash=draft.get("approval_hash", ""),
             review_required=draft.get("review_required", False),
             review_flags=draft.get("review_flags", []),
         )
@@ -866,7 +886,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             cv_meta=cv_meta,
             candidate_name=candidate_name,
             master_profile=master_profile,
-            tailored_result=None,
         )
 
     @app.route("/cv/upload", methods=["POST"])
@@ -902,66 +921,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         flash("Registered CV has been removed.", "info")
         return redirect(url_for("import_contacts_page"))
 
-    @app.route("/cv/test-tailor", methods=["POST"])
-    def test_cv_tailoring_route() -> str:
-        target_company = request.form.get("target_company", "Acme AI Labs").strip()
-        target_role = request.form.get("target_role", "AI/ML Intern").strip()
-        job_description = request.form.get("job_description", "").strip()
-
-        cv_meta = get_registered_cv_metadata()
-        master_profile = load_profile("data/master_profile.json")
-        candidate_name = master_profile.get("personal_info", {}).get("full_name", "Candidate")
-
-        # Run project selection
-        selection = select_projects(
-            profile=master_profile,
-            job_description=job_description,
-            target_role=target_role,
-        )
-
-        selected_projects = []
-        for p in selection.selected_projects:
-            title = p.get("title", p.get("name", "Selected Project")) if isinstance(p, dict) else getattr(p, "title", "Selected Project")
-            score = p.get("score", 100) if isinstance(p, dict) else getattr(p, "score", 100)
-            reason = (
-                p.get("ranking_reason", p.get("summary", "Selected by relevance algorithm"))
-                if isinstance(p, dict)
-                else getattr(p, "reason", "Selected by relevance algorithm")
-            )
-            selected_projects.append({
-                "name": title,
-                "score": score,
-                "reason": reason,
-            })
-
-        # Run CV generation
-        tailored_res = generate_tailored_cv(
-            profile=master_profile,
-            selection_result=selection,
-            job_description=job_description,
-            target_role=target_role,
-            target_company=target_company,
-        )
-
-        pdf_filename = Path(tailored_res.pdf_path).name if tailored_res.pdf_path else ""
-
-        result_view = {
-            "selected_projects": selected_projects,
-            "content": tailored_res.content,
-            "pdf_path": tailored_res.pdf_path,
-            "pdf_filename": pdf_filename,
-            "pdf_error": tailored_res.pdf_error,
-        }
-
-        return render_template(
-            "cv.html",
-            active_tab="cv",
-            cv_meta=cv_meta,
-            candidate_name=candidate_name,
-            master_profile=master_profile,
-            tailored_result=result_view,
-        )
-
     # -----------------------------------------------------------------------
     # Route: Send Log
     # -----------------------------------------------------------------------
@@ -988,10 +947,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         if not safe_name.lower().endswith(".pdf"):
             flash("Access denied: only PDF files may be downloaded.", "danger")
             return redirect(url_for("cv_settings"))
-        # Look strictly in output/uploaded_cvs, output/tailored_cvs, templates
+        # Look strictly in output/uploaded_cvs and templates
         candidate_dirs = [
             Path("output/uploaded_cvs").resolve(),
-            Path("output/tailored_cvs").resolve(),
             Path("templates").resolve(),
         ]
         for cdir in candidate_dirs:

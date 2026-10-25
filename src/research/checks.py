@@ -430,6 +430,7 @@ def check_company_identity(
 def check_domain_relationship(
     inp: ResearchInput,
     evidence: list[EvidenceItem],
+    identity_status: str | None = None,
 ) -> tuple[str, list[str]]:
     """
     Compare the contact email domain with the supplied/evidenced company domain.
@@ -524,16 +525,48 @@ def check_domain_relationship(
 
     # Direct match on registered domain (no subdomain involved)
     if email_rd == company_rd:
+        if is_discovered_website and identity_status != SUPPORTED:
+            # Circular reasoning guard: the "website" here was itself
+            # guessed from the email domain (https://<domain>), so a
+            # bare domain match proves nothing beyond the guess. It stays
+            # REVIEW -- UNLESS the retrieved page content itself names the
+            # domain label (e.g. the page at enterprise.com says
+            # "Enterprise"). That is content corroboration, not circular
+            # reasoning: the page could have said anything, and it said
+            # the matching name.
+            domain_label = (email_rd.split(".")[0] or "").lower()
+            content_corroborated = False
+            for _e in evidence:
+                if _e.source_type == "discovered_website" and _e.retrieval_status == RETRIEVAL_OK:
+                    _text = ((_e.title or "") + " " + (_e.extracted_text or "")).lower()
+                    if domain_label and domain_label in _text:
+                        content_corroborated = True
+                        break
+            if not content_corroborated:
+                limitations.append(
+                    f"Email domain '{email_rd}' matches candidate website domain '{company_rd}', "
+                    "but that website was discovered from the email domain itself, so the "
+                    "match is circumstantial and cannot SUPPORT the relationship on its own. "
+                    "Company identity must be validated from page content."
+                )
+                return REVIEW, limitations
+            limitations.append(
+                f"Email domain '{email_rd}' matches candidate website domain '{company_rd}'. "
+                "The website was discovered from the email domain, but its retrieved "
+                "content names the domain label, corroborating the relationship."
+            )
+            return SUPPORTED, limitations
         if is_discovered_website:
             limitations.append(
                 f"Email domain '{email_rd}' matches candidate website domain '{company_rd}'. "
-                "Candidate domain discovery is circumstantial; company identity must be validated from content."
+                "The website was discovered from the email domain, but company "
+                "identity was independently confirmed from page content."
             )
-        else:
-            limitations.append(
-                "Domain match is useful evidence but does not confirm that this specific "
-                "person is an authorised recruiter."
-            )
+            return SUPPORTED, limitations
+        limitations.append(
+            "Domain match is useful evidence but does not confirm that this specific "
+            "person is an authorised recruiter."
+        )
         return SUPPORTED, limitations
 
     # Mismatch

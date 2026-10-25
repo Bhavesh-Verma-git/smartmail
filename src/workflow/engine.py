@@ -1,8 +1,7 @@
 """
 src/workflow/engine.py
 ----------------------
-End-to-end workflow orchestrator supporting both Uploaded CV Mode (default)
-and Tailored CV Mode (optional secondary).
+end-to-end workflow orchestrator for the uploaded-CV-only workflow.
 """
 from __future__ import annotations
 
@@ -14,9 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from src.contacts.csv_importer import ContactRecord
-from src.cv.generator import CVGenerator, generate_tailored_cv
-from src.cv.models import ProjectSelectionResult, TailoredCVResult
-from src.cv.selector import ProjectSelector, select_projects
 from src.outreach.drafting import draft_outreach_email
 from src.outreach.mailer import EmailReviewManager, EmailSender
 from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMode
@@ -41,8 +37,6 @@ class WorkflowResult:
     status: str  # "PROCEED", "REVIEW", "BLOCKED", "ERROR"
     draft: EmailDraft | None = None
     verification: PipelineResult | None = None
-    selection_result: ProjectSelectionResult | None = None
-    tailored_cv: TailoredCVResult | None = None
     message: str = ""
     error: str | None = None
     # Stage 3 additions
@@ -51,6 +45,7 @@ class WorkflowResult:
     research_result: Any | None = None
     classification: ContactClassification | None = None
     recipient_resolution: Any | None = None
+    cross_campaign_warning: str = ""
 
 
 @dataclass
@@ -92,7 +87,7 @@ class BatchResult:
 class OutreachWorkflow:
     """
     Unified workflow controller orchestrating research, verification,
-    CV handling (uploaded vs tailored), drafting, and review.
+    uploaded-CV handling, drafting, and review.
     """
 
     def __init__(
@@ -114,6 +109,8 @@ class OutreachWorkflow:
 
         self._lock = threading.RLock()
         self.research_cache: ResearchCache = ResearchCache()
+        if default_mode != WorkflowMode.UPLOADED_CV:
+            raise ValueError("Tailored-CV mode was removed. Only uploaded-CV mode is supported.")
         self._mode = default_mode
         self._uploaded_cv_path: Path | None = None
         self._uploaded_cv_hash: str | None = None
@@ -131,11 +128,9 @@ class OutreachWorkflow:
         )
         # Persistent send log — default to SQLite; tests may pass in-memory instance
         self.send_log: SendLog = send_log or SendLog()
+        self.sender.send_log = self.send_log
         self.campaign_id = campaign_id
 
-        # Execution tracking flags for tests
-        self.project_selection_invoked = False
-        self.cv_generation_invoked = False
 
     # -----------------------------------------------------------------------
     # Mode Management
@@ -147,7 +142,17 @@ class OutreachWorkflow:
         return self._mode
 
     def set_mode(self, mode: WorkflowMode) -> None:
-        """Switch workflow mode between Uploaded CV and Tailored CV."""
+        """Set the workflow mode. Only the uploaded-CV mode is supported.
+
+        The tailored-CV mode was removed; passing it raises instead of
+        silently falling back, so a legacy request can never be mistaken
+        for an uploaded-CV run.
+        """
+        if mode != WorkflowMode.UPLOADED_CV:
+            raise ValueError(
+                "Tailored-CV mode was removed. Only uploaded-CV mode is supported; "
+                "legacy tailored drafts are blocked, never converted."
+            )
         with self._lock:
             self._mode = mode
 
@@ -307,10 +312,8 @@ class OutreachWorkflow:
                 recipient_resolution=rec_res,
             )
 
-        # 3. CV Handling by Mode
+        # 3. Uploaded-CV handling (the only supported mode)
         attachment_path = ""
-        selection_res: ProjectSelectionResult | None = None
-        tailored_cv_res: TailoredCVResult | None = None
 
         if self._mode == WorkflowMode.UPLOADED_CV:
             # UPLOADED CV MODE RULES:
@@ -323,50 +326,7 @@ class OutreachWorkflow:
             if not self.verify_uploaded_cv_unmodified():
                 raise RuntimeError("Uploaded CV was unexpectedly altered!")
 
-            # 3. Project selection and CV generation MUST NOT BE INVOKED.
-            self.project_selection_invoked = False
-            self.cv_generation_invoked = False
-
             attachment_path = str(self._uploaded_cv_path.resolve())
-
-        elif self._mode == WorkflowMode.TAILORED_CV:
-            # TAILORED CV MODE RULES:
-            # 1. Project selection: ControlPlane.ai always first + 2 ranked eligible projects.
-            self.project_selection_invoked = True
-            tech_areas = verification_result.match.matched_areas
-            selection_res = select_projects(
-                profile=self.profile,
-                job_description=job_description or job_url,
-                target_role=effective_role,
-                technical_areas=tech_areas,
-            )
-
-            # 2. Generate separate tailored CV (Markdown + PDF).
-            self.cv_generation_invoked = True
-            tailored_cv_res = generate_tailored_cv(
-                profile=self.profile,
-                selection_result=selection_res,
-                job_description=job_description or job_url,
-                target_role=effective_role,
-                target_company=company_name,
-                technical_areas=tech_areas,
-                output_dir=custom_output_dir,
-            )
-
-            # 3. Use generated CV as attachment; surface error if PDF failed.
-            if tailored_cv_res.pdf_error:
-                return WorkflowResult(
-                    mode=self._mode,
-                    contact_email=recipient_email,
-                    company_name=company_name,
-                    status="ERROR",
-                    verification=verification_result,
-                    selection_result=selection_res,
-                    tailored_cv=tailored_cv_res,
-                    message=f"CV PDF generation failed: {tailored_cv_res.pdf_error}",
-                    error=tailored_cv_res.pdf_error,
-                )
-            attachment_path = tailored_cv_res.file_path
 
         # 4. Draft Outreach Email (Stage 4 Personalized Drafting)
         draft = draft_outreach_email(
@@ -379,8 +339,6 @@ class OutreachWorkflow:
             verification_pipeline_result=verification_result,
             mode=self._mode,
             attachment_path=attachment_path,
-            project_selection=selection_res,
-            tailored_cv_path=tailored_cv_res.file_path if tailored_cv_res else None,
             contact_notes=contact.notes,
             classification=contact_classification,
             recipient_resolution=rec_res,
@@ -396,9 +354,10 @@ class OutreachWorkflow:
             campaign_id=self.campaign_id,
         )
 
-        # 5. Final check on uploaded CV preservation
-        if self._uploaded_cv_path:
-            assert self.verify_uploaded_cv_unmodified(), "Uploaded CV modified during workflow execution!"
+        # 5. Final check on uploaded CV preservation (explicit error, not
+        # a bare assert, so it still fires under `python -O`).
+        if self._uploaded_cv_path and not self.verify_uploaded_cv_unmodified():
+            raise RuntimeError("Uploaded CV modified during workflow execution!")
 
         return WorkflowResult(
             mode=self._mode,
@@ -407,8 +366,6 @@ class OutreachWorkflow:
             status=overall_status,
             draft=draft,
             verification=verification_result,
-            selection_result=selection_res,
-            tailored_cv=tailored_cv_res,
             message="Outreach draft generated and awaiting human review.",
             row_number=getattr(contact, "row_number", None),
             contact=contact,
@@ -458,6 +415,39 @@ class OutreachWorkflow:
         """Attempt to send an approved draft through safeguards and atomic reservation."""
         draft = self.review_manager.get_draft(draft_id)
 
+        # Future-live gates (dry-run unaffected): live transmission must
+        # be deliberately enabled and not kill-switched, and must stay
+        # under the conservative daily cap. These run BEFORE claiming so a
+        # blocked live attempt never reserves the draft.
+        if not self.sender.dry_run:
+            from src.outreach.compliance import daily_send_cap, live_sending_enabled
+            from datetime import datetime, timezone as _tz
+            # The live gate targets the REAL Gmail provider only. Injected
+            # providers are test doubles (the mailer documents them as
+            # test-only); blocking them would break the mock live-send
+            # path tests rely on. With no provider at all, the mailer
+            # itself reports GMAIL_NOT_CONFIGURED / LIVE_SENDING_DISABLED
+            # honestly and never transmits, so it is left to the mailer.
+            _prov = getattr(self.sender, "provider", None)
+            _is_real_gmail = (
+                _prov is not None
+                and type(_prov).__name__ == "GmailProvider"
+            )
+            if _is_real_gmail and not live_sending_enabled():
+                return SendResult(
+                    success=False, draft_id=draft_id, recipient=draft.recipient,
+                    message="Live email transmission is disabled in SmartMail.",
+                    error="LIVE_SENDING_DISABLED",
+                )
+            cap = daily_send_cap()
+            today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+            if self.send_log.count_success_on_day(today) >= cap:
+                return SendResult(
+                    success=False, draft_id=draft_id, recipient=draft.recipient,
+                    message=f"Daily live-send cap reached ({cap} confirmed sends today).",
+                    error="SEND_CAP_REACHED",
+                )
+
         # Atomic reservation / claim against persistent SQLite send_log
         claimed, claim_reason = self.send_log.claim_for_sending(
             draft_id=draft_id,
@@ -471,6 +461,7 @@ class OutreachWorkflow:
                 "ALREADY_SENT": f"Send blocked: An email has already been sent to {draft.recipient} (persistent send log).",
                 "UNCERTAIN_SEND": f"Send blocked: A previous send to {draft.recipient} had an uncertain outcome. Manual reconciliation required before resending.",
                 "SEND_IN_PROGRESS": f"Send blocked: A send attempt to {draft.recipient} is currently in progress.",
+                "SUPPRESSED": f"Send blocked: {draft.recipient} is on the suppression/opt-out list.",
                 "CONTENTION_ERROR": f"Send blocked: Database lock contention while attempting to reserve draft. Please retry.",
             }
             return SendResult(
@@ -495,6 +486,11 @@ class OutreachWorkflow:
                     recipient=draft.recipient,
                     campaign_id=self.campaign_id,
                 )
+        elif result.error == "APPROVAL_INVALIDATED":
+            # The draft changed after approval: drop the claim and leave
+            # the draft unapproved for re-review (mailer already cleared
+            # its in-memory approval and hash).
+            self.send_log.release_claim(draft_id=draft_id, status="DRAFT")
         elif result.error == "UNCERTAIN_SEND":
             self.send_log.record_uncertain(
                 draft_id=draft_id,
@@ -515,6 +511,8 @@ class OutreachWorkflow:
             "INVALID_ATTACHMENT",
             "SEND_IN_PROGRESS",
             "CONTENTION_ERROR",
+            "SUPPRESSED",
+            "SEND_CAP_REACHED",
         ):
             status_restore = "APPROVED" if draft.approved else "DRAFT"
             self.send_log.release_claim(draft_id=draft_id, status=status_restore)
@@ -642,6 +640,18 @@ class OutreachWorkflow:
                     contact=contact,
                 )
 
+            # Suppression blocks drafting entirely for this contact.
+            if self.send_log.is_suppressed(recipient):
+                return WorkflowResult(
+                    mode=self._mode,
+                    contact_email=recipient,
+                    company_name=getattr(contact, "company_name", "") or "",
+                    status=BLOCKED,
+                    message=f"Send prevented: {recipient} is on the suppression/opt-out list.",
+                    row_number=getattr(contact, "row_number", idx + 1),
+                    contact=contact,
+                )
+
             try:
                 wf_res = self.process_contact(
                     contact=contact,
@@ -650,6 +660,12 @@ class OutreachWorkflow:
                     research_provider=caching_provider,
                     custom_output_dir=custom_output_dir,
                 )
+                if wf_res.draft and self.send_log.has_any_campaign_send(recipient):
+                    wf_res.cross_campaign_warning = (
+                        f"Recipient {recipient} was already emailed under a different "
+                        "campaign. Duplicate protection is campaign-scoped; review "
+                        "before sending again."
+                    )
                 return wf_res
             except Exception as exc:
                 return WorkflowResult(

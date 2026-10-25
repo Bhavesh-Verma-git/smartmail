@@ -16,6 +16,7 @@ import os
 import threading
 from pathlib import Path
 from src.contacts.email_parser import parse_email
+from src.outreach.approval import approval_hash_for, approval_matches
 from src.outreach.models import DraftStatus, EmailDraft, SendResult
 
 
@@ -73,6 +74,10 @@ class EmailReviewManager:
         """
         with self._lock:
             draft = self.get_draft(draft_id)
+            if draft.status in (DraftStatus.SENT, DraftStatus.SIMULATED_SENT, DraftStatus.UNCERTAIN):
+                raise ValueError(
+                    f"Draft '{draft_id}' is already {draft.status.value} and cannot be edited."
+                )
             if recipient is not None:
                 draft.recipient = recipient.strip()
             if recipient_name is not None:
@@ -84,19 +89,24 @@ class EmailReviewManager:
             if attachment_path is not None:
                 draft.attachment_path = attachment_path.strip()
 
-            # Reset approval if edited
+            # Reset approval if edited, including its binding hash.
             draft.approved = False
+            draft.approval_hash = ""
             draft.status = DraftStatus.DRAFT
             return draft
 
     def approve_draft(self, draft_id: str) -> EmailDraft:
         """
-        Grant explicit human approval for sending.
+        Grant explicit human approval for sending, bound to the exact
+        draft content via approval_hash (see src/outreach/approval.py).
         """
         with self._lock:
             draft = self.get_draft(draft_id)
             draft.approved = True
             draft.status = DraftStatus.APPROVED
+            draft.approval_hash = approval_hash_for(
+                draft.recipient, draft.subject, draft.body, draft.attachment_path,
+            )
             return draft
 
     def reject_draft(self, draft_id: str, reason: str = "") -> EmailDraft:
@@ -155,11 +165,16 @@ class EmailSender:
         provider: Any = None,
         dry_run: bool = True,
         sender_address: str | None = None,
+        send_log: Any = None,
     ) -> None:
         self.review_manager = review_manager
         self.provider = provider
         self.dry_run = dry_run
         self.sender_address = sender_address or get_sender_address()
+        # Optional persistent send log for suppression checks. The engine
+        # always wires this; direct mailer use without it skips the check
+        # (the engine claim path still enforces suppression).
+        self.send_log = send_log
 
     def is_gmail_configured(self) -> bool:
         """Check if Gmail OAuth credentials and token paths are configured."""
@@ -195,6 +210,16 @@ class EmailSender:
                 recipient=draft.recipient,
                 message="Send blocked: Recipient email address is missing or syntactically invalid.",
                 error="INVALID_RECIPIENT",
+            )
+        # Suppression check (when a persistent log is wired in): an opted-out
+        # recipient is blocked even in dry-run mode.
+        if self.send_log is not None and self.send_log.is_suppressed(recipient_clean):
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Send blocked: {draft.recipient} is on the suppression/opt-out list.",
+                error="SUPPRESSED",
             )
         if not (draft.subject or "").strip():
             return SendResult(
@@ -317,6 +342,27 @@ class EmailSender:
                 error="APPROVAL_REQUIRED",
             )
 
+        # Safeguard 3b: Approval binding. If this draft was approved under
+        # the hash scheme, the hash must still match the current content.
+        # A mismatch means the draft was edited after approval: the old
+        # approval is invalid and the draft needs re-review. Drafts
+        # approved before this feature (empty hash) are grandfathered in
+        # for this check only; new approvals always carry a hash.
+        if draft.approval_hash and not approval_matches(
+            draft.approval_hash, draft.recipient, draft.subject, draft.body,
+            draft.attachment_path,
+        ):
+            draft.approved = False
+            draft.approval_hash = ""
+            draft.status = DraftStatus.DRAFT
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message="Send blocked: Draft was edited after approval; approval invalidated. Re-review and re-approve the exact draft.",
+                error="APPROVAL_INVALIDATED",
+            )
+
         # Safeguard 4: DRY RUN SAFETY CHECK (MUST precede any provider call)
         # Prevents real network transmission regardless of whether a provider is injected.
         if self.dry_run:
@@ -330,33 +376,51 @@ class EmailSender:
             )
 
         # Safeguard 5: Non-dry-run provider execution (strictly for tests/mock providers)
+        # Bounded retries: transient failures (timeout/connection) are
+        # retried at most twice (3 attempts total). Permanent failures are
+        # never retried. A timeout on the final attempt is UNCERTAIN -- the
+        # provider may have accepted the email -- and must be reconciled
+        # by a human, never blindly retried. A DB claim is NOT a guarantee
+        # of exactly-once delivery.
         if self.provider is not None:
-            try:
-                self.provider.send_email(
-                    recipient=draft.recipient,
-                    subject=draft.subject,
-                    body=draft.body,
-                    attachment_path=draft.attachment_path,
-                )
-                self.review_manager.record_sent(draft.recipient)
-                draft.status = DraftStatus.SENT
-                return SendResult(
-                    success=True,
-                    draft_id=draft_id,
-                    recipient=draft.recipient,
-                    message="Email sent successfully via injected provider.",
-                )
-            except Exception as e:
-                err_lower = str(e).lower()
-                is_timeout = any(kw in err_lower for kw in ("timeout", "timed out", "connection reset", "broken pipe"))
-                err_code = "UNCERTAIN_SEND" if is_timeout else "PROVIDER_ERROR"
-                return SendResult(
-                    success=False,
-                    draft_id=draft_id,
-                    recipient=draft.recipient,
-                    message=f"Provider failed to send email: {e}",
-                    error=err_code,
-                )
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    self.provider.send_email(
+                        recipient=draft.recipient,
+                        subject=draft.subject,
+                        body=draft.body,
+                        attachment_path=draft.attachment_path,
+                    )
+                    self.review_manager.record_sent(draft.recipient)
+                    draft.status = DraftStatus.SENT
+                    return SendResult(
+                        success=True,
+                        draft_id=draft_id,
+                        recipient=draft.recipient,
+                        message="Email sent successfully via injected provider.",
+                    )
+                except Exception as e:
+                    last_exc = e
+                    err_lower = str(e).lower()
+                    is_transient = any(kw in err_lower for kw in ("timeout", "timed out", "connection reset", "broken pipe", "connection error", "temporarily"))
+                    if not is_transient or attempt == 2:
+                        err_code = "UNCERTAIN_SEND" if is_transient else "PROVIDER_ERROR"
+                        return SendResult(
+                            success=False,
+                            draft_id=draft_id,
+                            recipient=draft.recipient,
+                            message=f"Provider failed to send email: {e}",
+                            error=err_code,
+                        )
+                    continue
+            return SendResult(
+                success=False,
+                draft_id=draft_id,
+                recipient=draft.recipient,
+                message=f"Provider failed to send email: {last_exc}",
+                error="PROVIDER_ERROR",
+            )
 
         # Check Gmail configuration honestly if in non-dry-run mode without custom provider
         if not self.is_gmail_configured():

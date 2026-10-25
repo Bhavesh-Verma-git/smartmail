@@ -8,7 +8,6 @@ Usage
   python -m src.cli --help
   python -m src.cli upload-cv --file path/to/cv.pdf
   python -m src.cli run-uploaded --contact contacts.csv --row 2 --role "AI/ML Intern" --jd "..."
-  python -m src.cli run-tailored --contact contacts.csv --row 2 --role "AI/ML Intern" --jd "..."
   python -m src.cli review-draft --id draft-abc12345
   python -m src.cli approve-draft --id draft-abc12345
   python -m src.cli send-draft   --id draft-abc12345
@@ -50,13 +49,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_run_args(p_run_up)
     p_run_up.add_argument("--cv", required=False, help="Path to CV file (overrides stored value)")
 
-    # --- run-tailored ---
-    p_run_tail = sub.add_parser(
-        "run-tailored",
-        help="Run outreach workflow in Tailored CV Mode (generates PDF from profile).",
-    )
-    _add_run_args(p_run_tail)
-
     # --- review-draft ---
     p_review = sub.add_parser("review-draft", help="Print a draft for human inspection.")
     p_review.add_argument("--id", required=True, help="Draft ID (e.g. draft-abc12345)")
@@ -93,9 +85,19 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- config-status ---
     sub.add_parser("config-status", help="Check status of optional external services (Tavily, Gemini, Groq) safely.")
 
+    # --- suppress ---
+    p_sup = sub.add_parser("suppress", help="Add a recipient to the persistent opt-out list.")
+    p_sup.add_argument("--email", required=True, help="Recipient email to suppress.")
+    p_sup.add_argument("--reason", default="", help="Reason for suppression.")
+    # --- unsuppress ---
+    p_unsup = sub.add_parser("unsuppress", help="Remove a recipient from the opt-out list.")
+    p_unsup.add_argument("--email", required=True, help="Recipient email to remove.")
+    # --- suppression-list ---
+    sub.add_parser("suppression-list", help="List suppressed recipients.")
+
     # --- ui ---
-    p_ui = sub.add_parser("ui", help="Launch the local SmartMail testing web UI.")
-    p_ui.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1).")
+    p_ui = sub.add_parser("ui", help="Launch the local SmartMail testing web UI (loopback only).")
+    p_ui.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1; only loopback is allowed).")
     p_ui.add_argument("--port", type=int, default=5000, help="Port to bind (default 5000).")
 
     return parser
@@ -153,7 +155,6 @@ def _save_draft_record(draft: Any, workflow: Any = None, campaign_id: str = "") 
         "approved": draft.approved,
         "review_required": draft.review_required,
         "review_flags": draft.review_flags,
-        "tailored_cv_path": draft.tailored_cv_path,
         "created_at": draft.created_at,
         "campaign_id": campaign_id,
     }
@@ -174,6 +175,15 @@ def _get_draft_and_workflow(draft_id: str) -> tuple[Any, Any] | None:
         from src.workflow.engine import OutreachWorkflow
 
         data = json.loads(file_path.read_text(encoding="utf-8"))
+        if data.get("mode") == "tailored_cv":
+            print(
+                "ERROR: This draft was created with the removed tailored-CV mode. "
+                "It cannot be sent, approved, or regenerated, and it is not "
+                "converted to an uploaded-CV draft (its attachment was a "
+                "generated file, not your uploaded CV). View it read-only instead.",
+                file=sys.stderr,
+            )
+            return None
         draft = EmailDraft(
             draft_id=data["draft_id"],
             recipient=data["recipient"],
@@ -185,9 +195,9 @@ def _get_draft_and_workflow(draft_id: str) -> tuple[Any, Any] | None:
             mode=WorkflowMode(data["mode"]),
             status=DraftStatus(data.get("status", "DRAFT")),
             approved=data.get("approved", False),
+            approval_hash=data.get("approval_hash", ""),
             review_required=data.get("review_required", False),
             review_flags=data.get("review_flags", []),
-            tailored_cv_path=data.get("tailored_cv_path"),
             created_at=data.get("created_at", ""),
         )
         send_log = SendLog(db_path="data/send_log.db")
@@ -213,6 +223,15 @@ def cmd_upload_cv(args: argparse.Namespace) -> int:
     file_path = Path(args.file)
     if not file_path.exists():
         print(f"ERROR: File not found: {file_path}", file=sys.stderr)
+        return 1
+    # Validate as a real PDF (same rules as the web upload) instead of
+    # registering any existing path, which previously accepted non-PDFs.
+    from src.ui.cv_validator import validate_cv_stream
+    try:
+        with file_path.open("rb") as fh:
+            validate_cv_stream(fh, filename=file_path.name)
+    except Exception as exc:
+        print(f"ERROR: CV validation failed: {exc}", file=sys.stderr)
         return 1
     session = _load_session()
     session["uploaded_cv_path"] = str(file_path.resolve())
@@ -263,13 +282,8 @@ def cmd_run(args: argparse.Namespace, mode_name: str) -> int:
             campaign_id=campaign_id,
         )
     else:
-        mode = WorkflowMode.TAILORED_CV
-        workflow = OutreachWorkflow(
-            default_mode=mode,
-            dry_run=True,
-            send_log=send_log,
-            campaign_id=campaign_id,
-        )
+        print("ERROR: Tailored-CV mode was removed. Use run-uploaded.", file=sys.stderr)
+        return 1
 
     print(f"\n[Workflow: {mode_name.upper()} CV MODE]")
     print(f"Contact: {contact.contact_name} <{contact.email_result.normalized_email}>")
@@ -297,8 +311,6 @@ def cmd_run(args: argparse.Namespace, mode_name: str) -> int:
         print(f"To:         {d.recipient}")
         print(f"Subject:    {d.subject}")
         print(f"Attachment: {d.attachment_path or '(none)'}")
-        if result.tailored_cv and result.tailored_cv.pdf_path:
-            print(f"PDF:        {result.tailored_cv.pdf_path}")
         if d.review_required:
             print(f"\n[REVIEW FLAGS] {'; '.join(d.review_flags)}")
         print(f"\nBody preview:\n{d.body[:300]}...")
@@ -426,6 +438,15 @@ def cmd_validate_profile(args: argparse.Namespace) -> int:
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"ERROR: Refusing to bind the UI to non-loopback host '{args.host}'. "
+            "SmartMail is a single-user localhost app; exposing it externally "
+            "requires a separate hosted-deployment readiness review "
+            "(authentication, HTTPS, CSRF, secret management).",
+            file=sys.stderr,
+        )
+        return 1
     from src.ui.app import create_app
     app = create_app()
     print("=" * 65)
@@ -434,6 +455,31 @@ def cmd_ui(args: argparse.Namespace) -> int:
     print(" (Bound to local loopback; dry-run safe mode is default)")
     print("=" * 65)
     app.run(host=args.host, port=args.port, debug=False)
+    return 0
+
+
+def cmd_suppress(args: argparse.Namespace) -> int:
+    from src.outreach.send_log import SendLog
+    SendLog(db_path="data/send_log.db").suppress(args.email, reason=args.reason)
+    print(f"Suppressed: {args.email.strip().lower()}")
+    return 0
+
+
+def cmd_unsuppress(args: argparse.Namespace) -> int:
+    from src.outreach.send_log import SendLog
+    removed = SendLog(db_path="data/send_log.db").unsuppress(args.email)
+    print(f"Removed from suppression list: {args.email.strip().lower()}" if removed else f"Not on suppression list: {args.email.strip().lower()}")
+    return 0
+
+
+def cmd_suppression_list(args: argparse.Namespace) -> int:
+    from src.outreach.send_log import SendLog
+    entries = SendLog(db_path="data/send_log.db").list_suppressed()
+    if not entries:
+        print("Suppression list is empty.")
+        return 0
+    for e in entries:
+        print(f"{e['recipient']}  [{e['source']}] {e['reason']} ({e['suppressed_at'][:19]})")
     return 0
 
 
@@ -465,7 +511,6 @@ def main(argv: list[str] | None = None) -> int:
     dispatch = {
         "upload-cv": cmd_upload_cv,
         "run-uploaded": lambda a: cmd_run(a, "uploaded"),
-        "run-tailored": lambda a: cmd_run(a, "tailored"),
         "review-draft": cmd_review_draft,
         "approve-draft": cmd_approve_draft,
         "send-draft": cmd_send_draft,
@@ -473,6 +518,9 @@ def main(argv: list[str] | None = None) -> int:
         "gmail-setup": cmd_gmail_setup,
         "validate-profile": cmd_validate_profile,
         "config-status": cmd_config_status,
+        "suppress": cmd_suppress,
+        "unsuppress": cmd_unsuppress,
+        "suppression-list": cmd_suppression_list,
         "ui": cmd_ui,
     }
 

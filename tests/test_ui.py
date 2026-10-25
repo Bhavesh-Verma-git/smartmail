@@ -244,6 +244,13 @@ def test_draft_editing_resets_approval(client: FlaskClient, test_send_log: SendL
 
 def test_draft_send_in_dry_run_mode(client: FlaskClient, test_send_log: SendLog):
     """Sending an approved draft in dry-run mode succeeds safely without network calls."""
+    # The send route requires the attachment file to exist; create the fixture
+    # the test's draft points at (previously an implicit, missing file).
+    Path("output").mkdir(exist_ok=True)
+    from pypdf import PdfWriter
+    _w = PdfWriter(); _w.add_blank_page(72, 72)
+    with open("output/test_uploaded_cv.pdf", "wb") as _fh:
+        _w.write(_fh)
     class MockProvider:
         def send_email(self, **kwargs):
             pass
@@ -279,6 +286,11 @@ def test_draft_send_in_dry_run_mode(client: FlaskClient, test_send_log: SendLog)
 
 def test_unconfigured_gmail_reports_honest_error(client: FlaskClient, test_send_log: SendLog):
     """When Gmail is not configured and no mock provider is injected, UI honestly reports GMAIL_NOT_CONFIGURED."""
+    Path("output").mkdir(exist_ok=True)
+    from pypdf import PdfWriter
+    _w = PdfWriter(); _w.add_blank_page(72, 72)
+    with open("output/test_uploaded_cv.pdf", "wb") as _fh:
+        _w.write(_fh)
     client.application.config["EMAIL_SENDER_PROVIDER"] = None
     client.application.config["DRY_RUN"] = False
 
@@ -305,29 +317,25 @@ def test_unconfigured_gmail_reports_honest_error(client: FlaskClient, test_send_
 
 
 # ---------------------------------------------------------------------------
-# CV Settings & Tailoring Preview Tests
+# CV Settings Tests (uploaded-CV only)
 # ---------------------------------------------------------------------------
 
-def test_cv_settings_page_and_tailoring_preview(client: FlaskClient):
-    """CV settings page displays uploaded CV details and runs tailored CV generation preview."""
+def test_cv_settings_page_uploaded_only(client: FlaskClient):
+    """CV settings page displays uploaded CV details; tailored mode is gone."""
     res = client.get("/cv")
     assert res.status_code == 200
     html = res.data.decode("utf-8")
-    assert "Uploaded CV Mode" in html
-    assert "Tailored CV Mode" in html
+    assert "Uploaded CV" in html
+    assert "Tailored CV Mode" not in html
     assert "SHA-256 Digest" in html
 
-    # Test Tailored CV generator test form
-    tailor_data = {
+    # The removed tailored route must not accept a POST (404, not a generation).
+    tailor_res = client.post("/cv/test-tailor", data={
         "target_company": "Apex Deep Learning",
         "target_role": "AI/ML Intern",
-        "job_description": "PyTorch, diffusion models, computer vision, distributed training",
-    }
-    tailor_res = client.post("/cv/test-tailor", data=tailor_data)
-    assert tailor_res.status_code == 200
-    tailor_html = tailor_res.data.decode("utf-8")
-    assert "ControlPlane.ai" in tailor_html
-    assert "Generated Markdown Content" in tailor_html
+        "job_description": "PyTorch, diffusion models",
+    })
+    assert tailor_res.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +714,6 @@ def test_csrf_rejection_across_state_changing_routes(tmp_path: Path, test_send_l
 
     routes = [
         ("/cv/clear", "POST", {}),
-        ("/cv/test-tailor", "POST", {"target_company": "Acme AI"}),
         ("/drafts/sample-draft/approve", "POST", {}),
         ("/drafts/sample-draft/reject", "POST", {}),
         ("/drafts/sample-draft/send", "POST", {}),
@@ -848,15 +855,45 @@ def test_dispatch_state_consistency_across_outcomes(tmp_path: Path, test_send_lo
         assert test_send_log.was_simulated("sync-audit@example.com", "sync-camp")
         assert not test_send_log.was_successfully_sent("sync-audit@example.com", "sync-camp")
 
-        # D. Edit draft -> must reset approval in BOTH draft JSON and SQLite send-log
+        # D. Edit of a SIMULATED_SENT draft is now blocked: its send
+        # history must not be rewritten into a fresh draft. (Previously
+        # this step expected an approval reset; the block is the intended
+        # new behaviour -- a revised version needs a new draft.)
         c.post(
             f"/drafts/{draft_id}/edit",
             data={"subject": "Revised Audit Subject", "body": "Revised Body"},
             follow_redirects=True,
         )
-        assert get_draft(draft_id)["status"] == "DRAFT"
-        assert get_draft(draft_id)["approved"] is False
-        assert test_send_log.get_status(draft_id) == "DRAFT"
+        assert get_draft(draft_id)["status"] == "SIMULATED_SENT"
+        assert get_draft(draft_id)["subject"] == "Audit Subject"
+        assert test_send_log.get_status(draft_id) == "SIMULATED"
+
+        # D2. Edit-reset behaviour is still verified on a fresh, unsent draft.
+        draft2_id = "draft-sync-audit-2"
+        draft2 = EmailDraft(
+            draft_id=draft2_id,
+            recipient="sync-audit-2@example.com",
+            recipient_name="Auditor",
+            company_name="AuditCorp",
+            subject="Audit Subject 2",
+            body="Audit Body 2",
+            attachment_path=str(valid_pdf),
+            mode=WorkflowMode.UPLOADED_CV,
+            status=DraftStatus.DRAFT,
+            approved=False,
+        )
+        save_draft_record(draft2, campaign_id="sync-camp")
+        test_send_log.record_draft(draft2_id, "sync-audit-2@example.com", "sync-camp")
+        c.post(f"/drafts/{draft2_id}/approve", follow_redirects=True)
+        assert get_draft(draft2_id)["approved"] is True
+        c.post(
+            f"/drafts/{draft2_id}/edit",
+            data={"subject": "Revised Audit Subject 2", "body": "Revised Body 2"},
+            follow_redirects=True,
+        )
+        assert get_draft(draft2_id)["status"] == "DRAFT"
+        assert get_draft(draft2_id)["approved"] is False
+        assert test_send_log.get_status(draft2_id) == "DRAFT"
 
         # E. Live mock provider send in isolated test (DRY_RUN=False)
         app.config["DRY_RUN"] = False

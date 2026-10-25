@@ -350,6 +350,8 @@ def match_candidate_experience(
 
     # -------------------------------------------------------------------------
     # Case 6: General AI/ML or Moderate Evidence (Default to ControlPlane)
+    # NOTE: this is a generic fallback, not a specific match -- it must not
+    # claim is_specific_match=True like the domain branches above.
     # -------------------------------------------------------------------------
     if cp_project:
         exp_name = cp_project.get("name", "ControlPlane.ai")
@@ -369,12 +371,12 @@ def match_candidate_experience(
             connection_rationale=rationale,
             relevant_technologies=["LangGraph", "Hybrid RAG", "Python", "LiteLLM"],
             secondary_experience_name=None,
-            is_specific_match=True,
+            is_specific_match=False,
             verified_company_finding=opportunity.concrete_finding,
             selected_candidate_experience=exp_name,
             technical_connection=rationale,
             supporting_cv_evidence="ControlPlane.ai: LangGraph agent workflows, hybrid retrieval, low-latency inference.",
-            limitations_or_assumptions=["General AI alignment based on candidate production background."],
+            limitations_or_assumptions=["General AI alignment based on candidate production background; no domain-specific match found."],
         )
 
     # -------------------------------------------------------------------------

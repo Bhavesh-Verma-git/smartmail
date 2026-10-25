@@ -45,6 +45,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_recipient_campaign_sending
 
 CREATE INDEX IF NOT EXISTS idx_recipient ON send_log (recipient);
 CREATE INDEX IF NOT EXISTS idx_draft_id  ON send_log (draft_id);
+
+-- Persistent opt-out / suppression list. Checked before every send
+-- (see claim_for_sending). A suppressed recipient is never sent to,
+-- in dry-run or live mode, until explicitly un-suppressed by the operator.
+CREATE TABLE IF NOT EXISTS suppression (
+    recipient     TEXT PRIMARY KEY,
+    reason        TEXT NOT NULL DEFAULT '',
+    source        TEXT NOT NULL DEFAULT 'manual',
+    suppressed_at TEXT NOT NULL
+);
 """
 
 # Status constants
@@ -215,6 +225,14 @@ class SendLog:
 
         try:
             with self._immediate_conn() as conn:
+                # 0. Suppression check: opt-out always wins, before any claim.
+                row_sup = conn.execute(
+                    "SELECT recipient FROM suppression WHERE recipient = ? LIMIT 1",
+                    (recipient_norm,),
+                ).fetchone()
+                if row_sup:
+                    return False, "SUPPRESSED"
+
                 # 1. Duplicate check: Confirmed live send exists
                 row_success = conn.execute(
                     """
@@ -325,11 +343,24 @@ class SendLog:
     ) -> None:
         now = _now_iso()
         recipient_norm = recipient.strip().lower()
+        # Terminal real-send states. SIMULATED is deliberately NOT in
+        # this set: a dry-run sent nothing, so resetting a simulated draft
+        # to DRAFT on edit is safe (and an existing test pins it). SUCCESS
+        # (a real send happened), UNCERTAIN (outcome unknown) and SENDING
+        # (in-flight claim) must never be erased by an edit.
+        _TERMINAL = {"SUCCESS", "UNCERTAIN", "SENDING"}
         with self._immediate_conn() as conn:
             # Check if row already exists for this draft_id
             row = conn.execute(
-                "SELECT id FROM send_log WHERE draft_id = ?", (draft_id,)
+                "SELECT id, status FROM send_log WHERE draft_id = ?", (draft_id,)
             ).fetchone()
+            if row and row["status"] in _TERMINAL and status in ("DRAFT", "APPROVED"):
+                # Never downgrade a terminal/send-state record back to
+                # DRAFT/APPROVED: editing a sent/simulated/uncertain draft
+                # must not erase its send history (previously _upsert
+                # overwrote unconditionally, contradicting
+                # remove_draft_record which preserves SUCCESS).
+                return
             if row:
                 if campaign_id:
                     conn.execute(
@@ -438,6 +469,74 @@ class SendLog:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Suppression / opt-out list (persistent, checked before every send)
+    # ------------------------------------------------------------------
+
+    def suppress(self, recipient: str, reason: str = "", source: str = "manual") -> None:
+        """Add a recipient to the persistent opt-out list (idempotent)."""
+        recipient_norm = recipient.strip().lower()
+        if not recipient_norm:
+            return
+        with self._immediate_conn() as conn:
+            conn.execute(
+                """INSERT INTO suppression (recipient, reason, source, suppressed_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(recipient) DO UPDATE SET reason=excluded.reason,
+                       source=excluded.source, suppressed_at=excluded.suppressed_at""",
+                (recipient_norm, reason, source, _now_iso()),
+            )
+
+    def unsuppress(self, recipient: str) -> bool:
+        """Remove a recipient from the opt-out list. Returns True if removed."""
+        recipient_norm = recipient.strip().lower()
+        with self._immediate_conn() as conn:
+            cur = conn.execute("DELETE FROM suppression WHERE recipient = ?", (recipient_norm,))
+            return cur.rowcount > 0
+
+    def is_suppressed(self, recipient: str) -> bool:
+        recipient_norm = recipient.strip().lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT recipient FROM suppression WHERE recipient = ? LIMIT 1",
+                (recipient_norm,),
+            ).fetchone()
+        return row is not None
+
+    def list_suppressed(self, limit: int = 500) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT recipient, reason, source, suppressed_at FROM suppression "
+                "ORDER BY suppressed_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_success_on_day(self, day_prefix: str) -> int:
+        """Count confirmed live SUCCESS sends whose updated_at starts with day_prefix (YYYY-MM-DD)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM send_log WHERE status = ? AND updated_at LIKE ?",
+                (STATUS_SUCCESS, day_prefix + "%"),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def has_any_campaign_send(self, recipient: str) -> bool:
+        """True if recipient has SUCCESS/SIMULATED under ANY campaign.
+
+        The duplicate rule itself stays campaign-scoped (a deliberate
+        product rule), but callers use this to warn when re-contacting
+        someone already emailed under a different campaign.
+        """
+        recipient_norm = recipient.strip().lower()
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT id FROM send_log
+                   WHERE recipient = ? AND status IN (?, ?) LIMIT 1""",
+                (recipient_norm, STATUS_SUCCESS, STATUS_SIMULATED),
+            ).fetchone()
+        return row is not None
 
     def remove_draft_record(self, draft_id: str) -> bool:
         """

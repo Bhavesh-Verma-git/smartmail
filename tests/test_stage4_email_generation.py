@@ -149,6 +149,13 @@ class TestPersonalizedEmailGeneration:
             company_name="DeepAI",
             ai_ml_evidence_summary="DeepAI builds enterprise retrieval-augmented generation and autonomous agent pipelines.",
             technical_areas=["Generative AI & LLM Applications", "RAG, Retrieval & Knowledge Systems"],
+            evidence=[EvidenceItem(
+                source_url="https://deepai.example/research",
+                source_type="official_website",
+                title="DeepAI Research",
+                extracted_text="DeepAI builds enterprise retrieval-augmented generation and autonomous agent pipelines for customers.",
+                retrieval_status=RETRIEVAL_OK,
+            )],
         )
         rec_res = resolve_recipient(
             supplied_name_or_email="alice.smith@deepai.com",
@@ -180,13 +187,18 @@ class TestPersonalizedEmailGeneration:
         # Check salutation
         assert "Dear Alice," in draft.body
         # Check education intro
-        assert "fourth-year Dual Degree student at IIT Kharagpur with a strong foundation in Applied AI and Machine Learning" in draft.body
-        # Check company alignment references verified areas
-        assert "Given DeepAI's focus on Generative AI & LLM Applications, RAG, Retrieval & Knowledge Systems," in draft.body
-        # Check practical candidate CV facts
-        assert "Red Panda Games" in draft.body
-        assert "diffusion models" in draft.body
-        assert "context-aware AI middleware and RAG architectures" in draft.body
+        assert "fourth-year Dual Degree student at IIT Kharagpur" in draft.body
+        assert "Applied AI and Machine Learning" in draft.body
+        # Check company alignment references the verified finding (STRONG
+        # evidence now anchors on the concrete finding, not the area list)
+        assert "Given DeepAI's work" in draft.body
+        assert "custom RAG pipelines" in draft.body
+        # Check practical candidate CV facts: only the RAG-relevant
+        # experience is claimed (Red Panda diffusion work is not relevant
+        # to a RAG company and must not be name-dropped here).
+        assert "hybrid retrieval pipeline" in draft.body
+        assert "FAISS" in draft.body
+        assert "Red Panda Games" not in draft.body
         # Check closing and availability
         assert "I am available for a 3–6 month internship." in draft.body
         # Check signature

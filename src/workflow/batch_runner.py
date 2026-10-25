@@ -110,6 +110,7 @@ def _format_result_entry(i: int, wf_res: WorkflowResult) -> dict[str, Any]:
         "evidence_items": evidence_list,
         "contradictions": wf_res.classification.contradictions if wf_res.classification else [],
         "message": wf_res.message,
+        "cross_campaign_warning": getattr(wf_res, "cross_campaign_warning", ""),
         "error": wf_res.error,
         "draft_id": draft_id,
         "generation_status": getattr(wf_res.draft, "generation_status", "DRAFT_GENERATED") if wf_res.draft else "GENERATION_FAILED",
@@ -162,6 +163,14 @@ class BackgroundBatchRunner:
         Initialize batch record on disk and launch background execution.
         Returns batch_id immediately (or waits if wait_for_completion=True in tests).
         """
+        if mode != WorkflowMode.UPLOADED_CV:
+            raise ValueError("Tailored-CV mode was removed. Only uploaded-CV mode is supported.")
+        if workflow.uploaded_cv_path is None or not workflow.uploaded_cv_path.exists():
+            raise ValueError(
+                "Uploaded-CV mode requires a registered CV before a batch starts; "
+                "failing fast instead of failing per-contact after research."
+            )
+        mode = WorkflowMode.UPLOADED_CV
         with self._lock:
             if batch_id in self._active_batches:
                 logger.warning("Batch %s is already running.", batch_id)
@@ -269,6 +278,18 @@ class BackgroundBatchRunner:
             # Contact processing task
             def _process_single(idx: int, contact: Any) -> WorkflowResult:
                 recipient = contact.email_result.normalized_email
+
+                # Suppression always wins: never draft for an opted-out recipient.
+                if workflow.send_log.is_suppressed(recipient):
+                    return WorkflowResult(
+                        mode=mode,
+                        contact_email=recipient,
+                        company_name=getattr(contact, "company_name", "") or "",
+                        status=BLOCKED,
+                        message=f"Send prevented: {recipient} is on the suppression/opt-out list.",
+                        row_number=getattr(contact, "row_number", idx + 1),
+                        contact=contact,
+                    )
 
                 # Check duplicate send against SQLite send_log
                 if workflow.send_log.was_successfully_sent(recipient, campaign_id) or (

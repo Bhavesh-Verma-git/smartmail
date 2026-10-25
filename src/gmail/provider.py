@@ -187,6 +187,12 @@ class GmailProvider:
         creds = flow.run_local_server(port=0)
         token_path = Path(self._token_path) if self._token_path else Path("token.json")
         token_path.write_text(creds.to_json())
+        # OAuth tokens are credentials: restrict to owner-only access
+        # instead of the process default umask.
+        try:
+            token_path.chmod(0o600)
+        except OSError:
+            pass
         print(f"Token saved to: {token_path}")
 
     # ------------------------------------------------------------------
@@ -204,6 +210,10 @@ class GmailProvider:
             if creds.expired and creds.refresh_token:
                 creds.refresh(_GRequest())
                 Path(self._token_path).write_text(creds.to_json())
+                try:
+                    Path(self._token_path).chmod(0o600)
+                except OSError:
+                    pass
             else:
                 raise GmailNotConfiguredError(
                     "Stored token is invalid and cannot be refreshed. "

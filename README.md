@@ -11,9 +11,7 @@ SmartMail automates the time-consuming aspects of company research, technical al
 - **Zero Accidental Sends (Dry-Run by Default)**: Live network transmission is disabled by default. Dry-run mode marks actions as `SIMULATED` without making external email API calls.
 - **Strict Privacy & Local-First Processing**: Candidate CV bytes, personal names, phone numbers, and contact details remain strictly on your local machine. External LLMs are queried only for public company research unless explicit opt-in is enabled.
 - **Evidence-Grounded Personalization**: No hallucinations, fabricated achievements, or fake referral claims. Outreach drafts strictly reference verified technical focus areas from official company websites and corroborated evidence.
-- **Uploaded CV vs. Tailored CV Modes**:
-  - **Uploaded CV Mode (Default)**: Preserves your original PDF byte-for-byte with SHA-256 integrity verification. Attaches the exact file to your drafts without modification or external LLM parsing.
-  - **Tailored CV Mode**: Deterministically selects exactly 3 relevant projects from your structured `master_profile.json` matching the company's verified tech stack and renders a tailored LaTeX PDF.
+- **Uploaded CV Only**: Preserves your original PDF byte-for-byte with SHA-256 integrity verification. Attaches the exact file to your drafts without modification or external LLM parsing. The former tailored-CV mode was removed; drafts stored with that mode are blocked, never silently converted.
 - **Separation of Classification Concerns**:
   - Email syntax validation & mailbox type (personal vs. generic inboxes like `recruiting@` or `careers@`).
   - Company identity verification & email domain consistency.
@@ -84,7 +82,6 @@ SmartMail automates the time-consuming aspects of company research, technical al
 
 ### 1. Prerequisites
 - **Python 3.11+** installed and available in PATH.
-- (Optional) LaTeX distribution (MiKTeX or TeX Live) if compiling PDFs in *Tailored CV Mode*.
 
 ### 2. Virtual Environment Setup
 ```powershell
@@ -204,5 +201,5 @@ SmartMail has an extensive test suite covering unit operations, security safegua
 
 ## Known Limitations & Future Work
 
-- **Tailored CV LaTeX Engine**: Compiling tailored PDFs in *Tailored CV Mode* requires a local TeX environment (`pdflatex` or `xelatex`). If LaTeX is not installed, SmartMail seamlessly operates in *Uploaded CV Mode*.
+- **Removed tailored-CV mode**: The former tailored-CV generator (project selection + generated PDF) was removed. Only the uploaded CV is used as an attachment.
 - **Future Live Sending**: Direct Gmail API sending is architected as an optional future provider. Live sending remains intentionally disabled in this release to prioritize verification accuracy and user review safety.

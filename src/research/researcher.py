@@ -174,9 +174,27 @@ def research_contact(
                 domain=inp.registered_domain if not inp.is_free_provider else "",
                 max_results=3,
             )
+            non_ok_tavily = 0
             for t_item in tavily_items:
                 if t_item.retrieval_status == RETRIEVAL_OK:
                     evidence.append(t_item)
+                else:
+                    non_ok_tavily += 1
+            if non_ok_tavily:
+                # Non-OK Tavily results were previously dropped silently,
+                # hiding a failed search behind "no evidence". Record the
+                # failure as a visible limitation instead of evidence.
+                evidence.append(EvidenceItem(
+                    source_url="",
+                    source_type="tavily_search",
+                    retrieval_status=RETRIEVAL_ERROR,
+                    retrieval_note="Tavily search returned non-OK result(s)",
+                    limitations=[
+                        f"Tavily search returned {non_ok_tavily} non-OK result(s) "
+                        "(rate limit, auth, timeout, or empty search); those "
+                        "results were not used as evidence."
+                    ],
+                ))
         except Exception as exc:
             evidence.append(EvidenceItem(
                 source_url="",
@@ -284,7 +302,7 @@ def research_contact(
 
     # --- Run the four checks ---------------------------------------------
     identity_status, identity_limits = check_company_identity(inp, evidence)
-    domain_status, domain_limits = check_domain_relationship(inp, evidence)
+    domain_status, domain_limits = check_domain_relationship(inp, evidence, identity_status=identity_status)
     role_status, role_limits, app_status = check_role_evidence(inp, evidence)
     tech_areas = check_technical_relevance(evidence)
 
@@ -360,7 +378,11 @@ def research_contact(
             if len(ai_evidence_summary) >= 5:
                 break
 
-    # Optional LLM structured analysis of public company evidence
+    # Optional LLM structured analysis of public company evidence.
+    # all_limitations is initialised BEFORE the try block: the exception
+    # handler appends to it, and it was previously assigned only after
+    # the try, so an LLM failure raised NameError inside the handler.
+    all_limitations: list[str] = []
     try:
         from src.llm.router import LLMRouter
         router = LLMRouter()
@@ -381,18 +403,21 @@ def research_contact(
                                 tech_areas.append(ea)
                 summary_snippet = llm_analysis.get("evidence_summary", "")
                 if summary_snippet and isinstance(summary_snippet, str):
+                    # The LLM summary is NOT attributed to any retrieved
+                    # URL: crediting it to ok_ext[0] would fabricate
+                    # provenance for generated text. It is labelled
+                    # llm_analysis and carries no source URL.
                     ai_evidence_summary.insert(0, {
                         "keyword": "llm_analysis",
                         "excerpt": summary_snippet[:300],
-                        "source_url": ok_ext[0].source_url if ok_ext else "",
+                        "source_url": "",
                     })
     except Exception as exc:
         all_limitations.append(f"Optional LLM extraction skipped: {type(exc).__name__}")
 
     # --- Aggregate limitations -------------------------------------------
-    all_limitations: list[str] = (
-        identity_limits + domain_limits + role_limits
-    )
+    # (LLM limitations collected above are kept, not overwritten.)
+    all_limitations.extend(identity_limits + domain_limits + role_limits)
     for item in evidence:
         all_limitations.extend(item.limitations)
 

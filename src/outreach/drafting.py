@@ -23,7 +23,6 @@ import re
 import uuid
 from typing import Any
 
-from src.cv.models import ProjectSelectionResult
 from src.outreach.context import OutreachContext, detect_outreach_context
 from src.outreach.experience_matcher import match_candidate_experience
 from src.outreach.models import EmailDraft, GenerationStatus, PersonalizationRecord, WorkflowMode
@@ -231,105 +230,6 @@ def _build_opening_paragraph(
     )
 
 
-def _build_alignment_paragraph(
-    matched_areas: list[str],
-    company_name: str,
-    mode: WorkflowMode,
-    project_selection: ProjectSelectionResult | None,
-    profile: dict[str, Any],
-    research_result: Any = None,
-) -> str:
-    """
-    Build the company-alignment paragraph tailored specifically to the company's
-    technical focus and grounded in verified profile/CV projects and experience.
-    """
-    clean_company = company_name.strip() if company_name and company_name != "Unknown Company" else ""
-
-    if matched_areas and clean_company:
-        areas_text = ", ".join(matched_areas)
-        tech_intro = f"Given {clean_company}'s focus on {areas_text}, "
-
-        # Check genuine candidate experience in profile
-        profile_exp = profile.get("experience", [])
-        profile_projects = profile.get("projects", [])
-        has_red_panda = any("red panda" in exp.get("organization", "").lower() for exp in profile_exp)
-        has_controlplane = any("controlplane" in p.get("name", "").lower() for p in profile_projects)
-        has_nlp_in_profile = any("nlp" in str(exp).lower() or "iiser" in exp.get("organization", "").lower() for exp in profile_exp) or any("nlp" in str(p).lower() for p in profile_projects)
-        has_mlops_in_profile = any("security" in str(p).lower() or "etl" in str(p).lower() for p in profile_projects) or bool(profile_exp)
-
-        if mode == WorkflowMode.TAILORED_CV and project_selection:
-            p1 = project_selection.primary_project.get("name", "")
-            secondaries = project_selection.secondary_projects or []
-            p2 = secondaries[0].get("name", "") if secondaries else ""
-            projects_summary = p1
-            if p2:
-                projects_summary += f" and {p2}"
-
-            if has_red_panda:
-                intern_text = "alongside my internship experience developing diffusion pipelines and ML inference workflows, "
-            elif profile_exp:
-                intern_text = "alongside my practical internship experience in machine learning, "
-            else:
-                intern_text = ""
-
-            return (
-                f"{tech_intro}I wanted to highlight my practical experience building scalable AI systems. "
-                f"Through {projects_summary}, {intern_text}I have focused on building "
-                f"reliable, production-grade AI architectures."
-            )
-
-        # Ground uploaded CV highlights in what actually matched AND what candidate has
-        areas_lower = [a.lower() for a in matched_areas]
-        has_genai = any(any(k in a for k in ("generative", "diffusion", "llm")) for a in areas_lower)
-        has_rag = any(any(k in a for k in ("rag", "retrieval", "agent")) for a in areas_lower)
-        has_nlp = any(any(k in a for k in ("nlp", "language", "embedding", "text")) for a in areas_lower)
-        has_ml = any(any(k in a for k in ("predictive", "machine learning", "data science", "analytics")) for a in areas_lower)
-        has_vision = any(any(k in a for k in ("vision", "media", "image")) for a in areas_lower)
-
-        highlight_sentences = []
-        if (has_genai or has_vision or has_rag) and (has_red_panda or has_controlplane):
-            if has_red_panda and (has_genai or has_vision):
-                highlight_sentences.append(
-                    "During my internship at Red Panda Games, I developed generative AI pipelines and diffusion models, "
-                    "working with tools such as Stable Diffusion and ControlNet."
-                )
-            if has_controlplane and (has_rag or not has_red_panda):
-                prefix = "Additionally, I" if highlight_sentences else "I"
-                highlight_sentences.append(
-                    f"{prefix} have practical experience building context-aware AI middleware and RAG architectures "
-                    "with an emphasis on low-latency inference and system reliability."
-                )
-        elif has_nlp and has_nlp_in_profile:
-            highlight_sentences.append(
-                "I have practical experience developing NLP pipelines, language embeddings with DeBERTa-v3, "
-                "and sequence models for text classification and attribute extraction."
-            )
-        elif has_ml and has_mlops_in_profile:
-            highlight_sentences.append(
-                "I have practical experience developing machine learning workflows, automated ETL pipelines, "
-                "and classification systems using Scikit-learn, XGBoost, and containerized architectures."
-            )
-        else:
-            highlight_sentences.append(
-                "I believe my background in applied machine learning, neural architectures, "
-                "and production pipelines aligns well with your team's technical initiatives."
-            )
-
-        highlights_text = " ".join(highlight_sentences)
-        return f"{tech_intro}I believe my background aligns well with your team's technical initiatives. {highlights_text}"
-
-    # Truthful neutral candidate overview when company evidence is absent or unverified
-    if profile.get("experience"):
-        return (
-            "My background includes practical experience in applied machine learning, data systems, "
-            "and software engineering. During my previous internship experience, I worked on production ML workflows "
-            "and data pipelines, focusing on building reliable systems and practical problem-solving."
-        )
-    return (
-        "My background includes practical experience in applied machine learning, data systems, "
-        "and software engineering, focusing on building reliable systems and practical problem-solving."
-    )
-
 
 def _build_closing(availability: str, seed_key: str = "") -> str:
     """Return a concise, natural closing paragraph with grammatically correct availability if known."""
@@ -498,8 +398,6 @@ def draft_outreach_email(
     verification_pipeline_result: PipelineResult | None = None,
     mode: WorkflowMode = WorkflowMode.UPLOADED_CV,
     attachment_path: str = "",
-    project_selection: ProjectSelectionResult | None = None,
-    tailored_cv_path: str | None = None,
     contact_notes: str = "",
     classification: Any = None,
     recipient_resolution: Any = None,
@@ -663,8 +561,6 @@ def draft_outreach_email(
         case_type=case_type,
         context=context,
         referrer_name=referrer_name,
-        mode=mode,
-        project_selection=project_selection,
         router=router,
         matched_areas=matched_areas,
     )
@@ -683,7 +579,6 @@ def draft_outreach_email(
         mode=mode,
         review_required=review_required,
         review_flags=review_flags,
-        tailored_cv_path=tailored_cv_path,
     )
 
     # ---- 8. Personalization Quality Gate ------------------------------------
@@ -766,7 +661,6 @@ def draft_outreach_email(
         mode=mode,
         review_required=review_required,
         review_flags=review_flags,
-        tailored_cv_path=tailored_cv_path,
         generation_status=generation_status,
         personalization_explanation=personalization_explanation,
         evidence_summary=evidence_summary,

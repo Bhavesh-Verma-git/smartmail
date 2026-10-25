@@ -380,12 +380,19 @@ def analyze_company_opportunity(
     primary_title = ""
     best_excerpt = ""
 
-    # Priority 1: Check ai_ml_evidence_summary for relevant excerpts
+    # Priority 1: Check ai_ml_evidence_summary for relevant excerpts.
+    # NOTE: a summary excerpt is NOT primary evidence on its own -- it may
+    # be an LLM-generated summary. It is used only to pick a candidate
+    # sentence; STRONG below still requires an excerpt from a retrieved
+    # evidence item (see excerpt_from_evidence flag).
+    excerpt_from_evidence = False
     for s_item in evidence_summaries:
         if isinstance(s_item, dict):
             exc = s_item.get("excerpt", "")
             src = s_item.get("source_url", "")
-            if exc and len(exc) > 30:
+            # A summary excerpt without a source URL cannot anchor a claim:
+            # skip it so Priority 2 (retrieved evidence items) is used.
+            if exc and src and len(exc) > 30:
                 s_domain = _classify_technical_domain(exc)
                 if s_domain == domain_class or domain_class == DOMAIN_GENERAL_AI:
                     best_excerpt = exc
@@ -402,6 +409,7 @@ def analyze_company_opportunity(
                 best_excerpt = sentence
                 primary_url = item.source_url
                 primary_title = item.title
+                excerpt_from_evidence = True
                 break
 
     # If primary_url is still empty, pick first evidence item
@@ -501,8 +509,11 @@ def analyze_company_opportunity(
         internship_details = "Internship availability unconfirmed."
         uncertainties.append("Internship status unverified from public sources.")
 
-    # 6. Assess evidence strength
-    if primary_url and best_excerpt and domain_class != DOMAIN_NONE:
+    # 6. Assess evidence strength. STRONG requires an excerpt taken from
+    # a retrieved evidence item itself -- a summary-only excerpt (which may
+    # be LLM-generated) caps at MODERATE, so a generated summary is never
+    # presented as strongly evidenced primary fact.
+    if primary_url and best_excerpt and excerpt_from_evidence and domain_class != DOMAIN_NONE:
         evidence_strength = "STRONG"
     elif primary_url and domain_class != DOMAIN_NONE:
         evidence_strength = "MODERATE"
@@ -510,6 +521,15 @@ def analyze_company_opportunity(
         evidence_strength = "WEAK"
     else:
         evidence_strength = "NONE"
+
+    # Templated findings are domain-level syntheses, not quoted company
+    # statements. Say so, so a draft built on one is never mistaken for a
+    # verbatim company claim.
+    if concrete_finding and not (best_excerpt and best_excerpt in concrete_finding):
+        uncertainties.append(
+            "Company description is a domain-level summary synthesised from "
+            "retrieved evidence, not a quoted statement from the company."
+        )
 
     return CompanyOpportunity(
         company_name=clean_name,

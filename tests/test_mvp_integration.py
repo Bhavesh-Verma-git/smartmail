@@ -744,10 +744,14 @@ class TestUploadedCVIntegrity:
             send_log=SendLog(db_path=":memory:"),
         )
         contact = _make_contact("hr@example.com", website="https://example.com")
-        wf.process_contact(contact, target_role="AI/ML Intern",
-                           research_provider=_MockResearchProvider())
-        assert wf.project_selection_invoked is False
-        assert wf.cv_generation_invoked is False
+        result = wf.process_contact(contact, target_role="AI/ML Intern",
+                                    research_provider=_MockResearchProvider())
+        # Tailored machinery is gone: no generated file can exist, and the
+        # draft attachment must be the uploaded CV itself.
+        assert result.draft is not None
+        assert result.draft.attachment_path == str(_CV_PATH.resolve())
+        assert not hasattr(result, "tailored_cv")
+        assert not hasattr(result, "selection_result")
 
     def test_cv_sha256_tracked_by_workflow(self, tmp_path):
         content = b"%PDF-1.4 sample cv content"

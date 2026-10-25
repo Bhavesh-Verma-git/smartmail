@@ -485,12 +485,15 @@
       document.getElementById('modalMatchedAreas').textContent = areas.length ? areas.join(', ') : 'No confirmed AI/ML technical subdisciplines';
       document.getElementById('modalAimlRelevance').textContent = data.ai_ml_relevant ? 'Yes (Evidence-backed AI/ML work)' : (data.classification === 'NOT_AI_RELEVANT' ? 'No (Not AI/ML focused)' : 'Uncertain (Insufficient evidence)');
 
-      // Contradictions
+      // Contradictions -- escaped: contradiction text comes from scraped
+      // pages / contact CSVs and must never be injected as HTML.
+      const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      const safeHref = (u) => { try { const url = new URL(u); return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '#'; } catch { return '#'; } };
       const contraSection = document.getElementById('modalContradictionsSection');
       const contraText = document.getElementById('modalContradictionsText');
       if (data.contradictions && data.contradictions.length > 0) {
         contraSection.style.display = 'block';
-        contraText.innerHTML = data.contradictions.map(c => '<div>&bull; ' + c + '</div>').join('');
+        contraText.innerHTML = data.contradictions.map(c => '<div>&bull; ' + esc(c) + '</div>').join('');
       } else {
         contraSection.style.display = 'none';
       }
@@ -517,17 +520,17 @@
           card.innerHTML = `
             <div class="evidence-item-header">
               <div>
-                <a href="${it.source_url}" target="_blank" rel="noopener noreferrer" class="evidence-source-link">
-                  ${it.source_url}
+                <a href="${esc(safeHref(it.source_url))}" target="_blank" rel="noopener noreferrer" class="evidence-source-link">
+                  ${esc(it.source_url)}
                 </a>
                 <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-                  Type: <code>${it.source_type || 'web_page'}</code> &bull; Title: <em>${it.title || 'Untitled'}</em>
+                  Type: <code>${esc(it.source_type || 'web_page')}</code> &bull; Title: <em>${esc(it.title || 'Untitled')}</em>
                 </div>
               </div>
-              <span class="badge ${statusBadgeClass}" style="font-size: 10px;">${retStatus}</span>
+              <span class="badge ${statusBadgeClass}" style="font-size: 10px;">${esc(retStatus)}</span>
             </div>
-            ${it.claim_supported ? `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;"><strong>Claim Supported:</strong> ${it.claim_supported}</div>` : ''}
-            ${it.extracted_text ? `<div class="evidence-excerpt">${it.extracted_text}</div>` : ''}
+            ${it.claim_supported ? `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;"><strong>Claim Supported:</strong> ${esc(it.claim_supported)}</div>` : ''}
+            ${it.extracted_text ? `<div class="evidence-excerpt">${esc(it.extracted_text)}</div>` : ''}
           `;
           container.appendChild(card);
         });

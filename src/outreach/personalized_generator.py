@@ -15,7 +15,6 @@ import logging
 import re
 from typing import Any
 
-from src.cv.models import ProjectSelectionResult
 from src.llm.router import LLMRouter
 from src.outreach.context import OutreachContext
 from src.outreach.experience_matcher import (
@@ -26,7 +25,6 @@ from src.outreach.experience_matcher import (
     DOMAIN_NLP_LINGUISTICS,
     DOMAIN_ML_DATA_SYSTEMS,
 )
-from src.outreach.models import WorkflowMode
 from src.outreach.opportunity_analyzer import CompanyOpportunity, sanitize_evidence_text
 from src.verification.models import SPECIFIC_INTERNSHIP
 
@@ -61,8 +59,6 @@ def generate_personalized_email_body(
     case_type: str = "",
     context: OutreachContext = OutreachContext.DIRECT_APPLICATION,
     referrer_name: str = "",
-    mode: WorkflowMode = WorkflowMode.UPLOADED_CV,
-    project_selection: ProjectSelectionResult | None = None,
     router: LLMRouter | None = None,
     matched_areas: list[str] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
@@ -135,8 +131,6 @@ def generate_personalized_email_body(
         context=context,
         referrer_name=referrer_name,
         duration_phrase=duration_phrase,
-        mode=mode,
-        project_selection=project_selection,
         matched_areas=matched_areas,
     )
 
@@ -154,8 +148,6 @@ def _compose_grounded_email(
     context: OutreachContext,
     referrer_name: str,
     duration_phrase: str,
-    mode: WorkflowMode,
-    project_selection: ProjectSelectionResult | None,
     matched_areas: list[str] | None = None,
 ) -> str:
     """Compose natural, company-specific email body without universal templates."""
@@ -208,38 +200,14 @@ def _compose_grounded_email(
         )
 
     # Substantive Alignment Paragraph
-    # Check if this is a Tailored CV mode
-    if mode == WorkflowMode.TAILORED_CV and project_selection:
-        p1 = project_selection.primary_project.get("name", "")
-        secondaries = project_selection.secondary_projects or []
-        p2 = secondaries[0].get("name", "") if secondaries else ""
-        projects_summary = f"{p1} and {p2}" if p2 else p1
-
-        if opportunity.concrete_finding and clean_company:
-            finding_intro = f"Given {clean_company}'s work in {opportunity.concrete_finding}, "
-        elif matched_areas and clean_company:
-            finding_intro = f"Given {clean_company}'s focus on {', '.join(matched_areas)}, "
-        else:
-            finding_intro = ""
-
-        profile_exp = profile.get("experience", [])
-        has_red_panda = any("red panda" in exp.get("organization", "").lower() for exp in profile_exp)
-        intern_text = "alongside my internship experience developing diffusion pipelines and ML inference workflows, " if has_red_panda else ""
-
-        alignment = (
-            f"{finding_intro}I wanted to highlight my practical experience building scalable AI systems. "
-            f"Through {projects_summary}, {intern_text}I have focused on building "
-            f"reliable, production-grade AI architectures."
-        )
-
-    # Uploaded CV mode with STRONG/MODERATE company evidence
+    # Uploaded-CV mode with STRONG/MODERATE company evidence
     # Build alignment using the company-specific concrete_finding and the
     # candidate's domain-matched concrete_candidate_work.
     # We deliberately do NOT use candidate_match.connection_rationale here
     # because that field is still domain-keyed (same phrasing for all
     # DOMAIN_RAG_AGENTS companies, for example).  Instead we anchor the
     # sentence to opportunity.concrete_finding, which IS company-specific.
-    elif opportunity.concrete_finding and opportunity.evidence_strength in ("STRONG", "MODERATE") and clean_company:
+    if opportunity.concrete_finding and opportunity.evidence_strength in ("STRONG", "MODERATE") and clean_company:
         work = candidate_match.concrete_candidate_work
         finding = sanitize_evidence_text(opportunity.concrete_finding)
 

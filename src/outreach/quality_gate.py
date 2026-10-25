@@ -101,8 +101,13 @@ def evaluate_personalization_quality(
             failures.append("Missing company-specific anchor: email does not reflect verified research findings.")
             review_flags.append("Company-specific research anchor missing from body text.")
     else:
-        # If low/no evidence, the draft must NOT pretend to be deeply personalized
-        checks["has_supported_anchor"] = True
+        # If low/no evidence, the draft must NOT pretend to be deeply
+        # personalized. Previously this check auto-passed for WEAK/NONE
+        # evidence, letting an ungrounded draft look gate-approved. Now it
+        # fails, which forces review_required in drafting.
+        checks["has_supported_anchor"] = False
+        failures.append("Low or missing company evidence; draft requires human review before it can be treated as personalised.")
+        review_flags.append("Company evidence is weak or missing; human review required.")
         if not draft.review_required:
             notes.append("Low company evidence; human review required.")
 

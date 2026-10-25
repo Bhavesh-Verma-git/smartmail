@@ -164,10 +164,6 @@
             <div class="mode-title">Uploaded CV Mode</div>
             <div class="mode-desc">Preserves your registered CV byte-for-byte. Recommended for real outreach.</div>
           </div>
-          <div class="mode-card" id="modeCardTailored" data-mode="tailored_cv">
-            <div class="mode-title">Tailored CV Mode</div>
-            <div class="mode-desc">Selects relevant projects from master profile and generates a tailored PDF.</div>
-          </div>
         </div>
       </div>
 
@@ -606,17 +602,8 @@
 
     btnBackToStep1.addEventListener("click", () => setWizardStep(1));
 
-    // Mode cards toggle
-    document.getElementById("modeCardUploaded").addEventListener("click", () => {
-      document.getElementById("modeCardUploaded").classList.add("selected");
-      document.getElementById("modeCardTailored").classList.remove("selected");
-      document.getElementById("formWorkflowMode").value = "uploaded_cv";
-    });
-    document.getElementById("modeCardTailored").addEventListener("click", () => {
-      document.getElementById("modeCardTailored").classList.add("selected");
-      document.getElementById("modeCardUploaded").classList.remove("selected");
-      document.getElementById("formWorkflowMode").value = "tailored_cv";
-    });
+    // Uploaded-CV is the only workflow mode; the hidden field stays constant.
+    document.getElementById("formWorkflowMode").value = "uploaded_cv";
 
     contactsDropzone.addEventListener("click", () => contactsFileInput.click());
 

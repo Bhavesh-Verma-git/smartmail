@@ -160,14 +160,13 @@ def node_draft(state: ContactGraphState, workflow: OutreachWorkflow) -> ContactG
     if state.status == BLOCKED:
         return state
 
-    if workflow.mode == WorkflowMode.UPLOADED_CV:
-        if not workflow.uploaded_cv_path or not workflow.uploaded_cv_path.exists():
-            raise RuntimeError("Uploaded CV Mode requires an existing CV file.")
-        if not workflow.verify_uploaded_cv_unmodified():
-            raise RuntimeError("Uploaded CV was unexpectedly altered!")
-        attachment_path = str(workflow.uploaded_cv_path.resolve())
-    else:
-        attachment_path = ""
+    if workflow.mode != WorkflowMode.UPLOADED_CV:
+        raise RuntimeError("Tailored-CV mode was removed. Only uploaded-CV mode is supported.")
+    if not workflow.uploaded_cv_path or not workflow.uploaded_cv_path.exists():
+        raise RuntimeError("Uploaded CV Mode requires an existing CV file.")
+    if not workflow.verify_uploaded_cv_unmodified():
+        raise RuntimeError("Uploaded CV was unexpectedly altered!")
+    attachment_path = str(workflow.uploaded_cv_path.resolve())
 
     rec_res = getattr(state.research_result, "recipient_resolution", None)
     cv_text = workflow.get_uploaded_cv_text()
@@ -186,8 +185,6 @@ def node_draft(state: ContactGraphState, workflow: OutreachWorkflow) -> ContactG
         verification_pipeline_result=state.verification,
         mode=workflow.mode,
         attachment_path=attachment_path,
-        project_selection=None,
-        tailored_cv_path=None,
         contact_notes=getattr(state.contact, "notes", ""),
         classification=state.classification,
         recipient_resolution=rec_res,
@@ -248,8 +245,8 @@ def node_persist(state: ContactGraphState, workflow: OutreachWorkflow) -> Contac
             campaign_id=workflow.campaign_id,
         )
 
-    if workflow.uploaded_cv_path:
-        assert workflow.verify_uploaded_cv_unmodified(), "Uploaded CV modified during graph execution!"
+    if workflow.uploaded_cv_path and not workflow.verify_uploaded_cv_unmodified():
+        raise RuntimeError("Uploaded CV modified during graph execution!")
 
     wf_res = WorkflowResult(
         mode=workflow.mode,
@@ -258,8 +255,6 @@ def node_persist(state: ContactGraphState, workflow: OutreachWorkflow) -> Contac
         status=state.status,
         draft=state.draft,
         verification=state.verification,
-        selection_result=None,
-        tailored_cv=None,
         message="Outreach draft generated and awaiting human review.",
         row_number=getattr(state.contact, "row_number", None),
         contact=state.contact,

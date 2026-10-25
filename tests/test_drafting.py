@@ -11,7 +11,7 @@ Coverage:
  - Fabrication guard: missing referrer name does not invent one
  - Fabrication guard: missing LinkedIn note does not invent conversation
  - Fabrication guard: verified matched_areas appear; unverified areas absent
- - WorkflowMode: Uploaded CV and Tailored CV alignment paragraphs
+ - WorkflowMode: Uploaded CV alignment paragraph
  - contact_notes wired through the OutreachWorkflow engine
  - review_required propagation from verification and from context detector
 """
@@ -21,7 +21,6 @@ import pytest
 
 from src.contacts.csv_importer import ContactRecord
 from src.contacts.email_parser import parse_email
-from src.cv.models import ProjectSelectionResult
 from src.outreach.context import (
     OutreachContext,
     ContextResult,
@@ -105,22 +104,6 @@ def _make_pipeline_result(
             case_type=case_type,
             matched_areas=matched_areas or [],
         ),
-    )
-
-
-def _make_project_selection() -> ProjectSelectionResult:
-    return ProjectSelectionResult(
-        primary_project={"name": "ControlPlane.ai — Context-Aware AI Governance Middleware"},
-        secondary_projects=[
-            {"name": "E-Commerce Price Prediction"},
-            {"name": "Building a Network Security System"},
-        ],
-        selected_projects=[
-            {"name": "ControlPlane.ai — Context-Aware AI Governance Middleware"},
-            {"name": "E-Commerce Price Prediction"},
-            {"name": "Building a Network Security System"},
-        ],
-        ranking_explanation="Selected for AI/ML relevance.",
     )
 
 
@@ -457,51 +440,22 @@ class TestSalutationAndSignature:
 
 
 # ---------------------------------------------------------------------------
-# Section 6: Tailored CV Mode Alignment
+# Section 6: Uploaded CV Mode Alignment (only supported mode)
 # ---------------------------------------------------------------------------
 
-class TestTailoredCVAlignmentParagraph:
-    """Tailored CV mode surfaces selected project names."""
-
-    def test_tailored_mode_primary_project_in_body(self):
-        selection = _make_project_selection()
-        pipeline = _make_pipeline_result(matched_areas=["AI agents", "LLMs"])
-        draft = draft_outreach_email(
-            profile=PROFILE,
-            recipient_email="hr@example.ai",
-            company_name="ExampleAI",
-            mode=WorkflowMode.TAILORED_CV,
-            verification_pipeline_result=pipeline,
-            project_selection=selection,
-        )
-        assert "ControlPlane.ai" in draft.body
-
-    def test_tailored_mode_secondary_project_in_body(self):
-        selection = _make_project_selection()
-        pipeline = _make_pipeline_result(matched_areas=["NLP"])
-        draft = draft_outreach_email(
-            profile=PROFILE,
-            recipient_email="hr@example.ai",
-            company_name="ExampleAI",
-            mode=WorkflowMode.TAILORED_CV,
-            verification_pipeline_result=pipeline,
-            project_selection=selection,
-        )
-        assert "E-Commerce Price Prediction" in draft.body
-
-    def test_uploaded_cv_mode_does_not_mention_specific_projects(self):
-        """Uploaded CV mode should not name specific projects (they live in the attached file)."""
-        pipeline = _make_pipeline_result(matched_areas=["Machine Learning"])
-        draft = draft_outreach_email(
-            profile=PROFILE,
-            recipient_email="hr@example.ai",
-            company_name="ExampleAI",
-            mode=WorkflowMode.UPLOADED_CV,
-            verification_pipeline_result=pipeline,
-        )
-        # Should NOT reference specific project names in the body
-        assert "ControlPlane.ai" not in draft.body
-        assert "E-Commerce Price Prediction" not in draft.body
+def test_uploaded_cv_mode_does_not_mention_specific_projects():
+    """Uploaded CV mode should not name specific projects (they live in the attached file)."""
+    pipeline = _make_pipeline_result(matched_areas=["Machine Learning"])
+    draft = draft_outreach_email(
+        profile=PROFILE,
+        recipient_email="hr@example.ai",
+        company_name="ExampleAI",
+        mode=WorkflowMode.UPLOADED_CV,
+        verification_pipeline_result=pipeline,
+    )
+    # Should NOT reference specific project names in the body
+    assert "ControlPlane.ai" not in draft.body
+    assert "E-Commerce Price Prediction" not in draft.body
 
 
 # ---------------------------------------------------------------------------
@@ -532,15 +486,29 @@ class TestReviewRequiredPropagation:
         assert draft.review_required is True
 
     def test_no_review_when_proceed_and_relevant(self):
+        # Grounded evidence is required for a no-review draft: with no
+        # evidence at all the gate now (correctly) forces review, so this
+        # fixture supplies a real retrieved evidence item.
+        from src.research.models import EvidenceItem, ResearchResult, RETRIEVAL_OK
         pipeline = _make_pipeline_result(
             overall_status=PROCEED,
             relevance_status=RELEVANT,
+        )
+        res_result = ResearchResult(
+            company_name="ExampleAI",
+            evidence=[EvidenceItem(
+                source_url="https://example.ai", source_type="official_website",
+                title="ExampleAI",
+                extracted_text="ExampleAI builds enterprise retrieval-augmented generation and autonomous agent pipelines for customers.",
+                retrieval_status=RETRIEVAL_OK,
+            )],
         )
         draft = draft_outreach_email(
             profile=PROFILE,
             recipient_email="hr@example.ai",
             company_name="ExampleAI",
             verification_pipeline_result=pipeline,
+            research_result=res_result,
         )
         assert draft.review_required is False
 

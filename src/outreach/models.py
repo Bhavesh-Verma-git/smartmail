@@ -13,7 +13,10 @@ from enum import Enum
 class WorkflowMode(str, Enum):
     """Selectable workflow modes in the application."""
     UPLOADED_CV = "uploaded_cv"   # Default and primary mode
-    TAILORED_CV = "tailored_cv"   # Optional secondary mode
+    # LEGACY ONLY: value kept so stored drafts from the removed tailored-CV
+    # mode can be detected and blocked (never silently converted).
+    # It is NOT a supported workflow mode; OutreachWorkflow rejects it.
+    TAILORED_CV = "tailored_cv"
 
 
 class DraftStatus(str, Enum):
@@ -92,13 +95,12 @@ class EmailDraft:
         company_name: Name of the target company.
         subject: Email subject line.
         body: Plain-text email body.
-        attachment_path: File path of the attached CV (original or tailored).
+        attachment_path: File path of the attached CV (the uploaded original).
         mode: The WorkflowMode used to generate this draft.
         status: Current status (DRAFT, APPROVED, SENT, REJECTED).
         approved: True only if explicit user approval was granted.
         review_required: True if company research, domain, or role matching returned REVIEW.
         review_flags: Warnings or notes requiring human attention.
-        tailored_cv_path: Path to the generated CV if tailored mode was used.
         created_at: ISO timestamp of creation.
         generation_status: Outcome of generation (DRAFT_GENERATED, NEEDS_REVIEW, GENERATION_FAILED).
         personalization_explanation: Concise explanation of evidence connecting candidate to company.
@@ -118,9 +120,11 @@ class EmailDraft:
     mode: WorkflowMode
     status: DraftStatus = DraftStatus.DRAFT
     approved: bool = False
+    # Hash binding this approval to the exact reviewed draft (recipient,
+    # subject, body, attachment identity). Empty for pre-feature approvals.
+    approval_hash: str = ""
     review_required: bool = False
     review_flags: list[str] = field(default_factory=list)
-    tailored_cv_path: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     generation_status: str = "DRAFT_GENERATED"
     personalization_explanation: str = ""

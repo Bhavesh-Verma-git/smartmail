@@ -141,6 +141,38 @@ _AREA_TO_PROFILE_FIELDS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     ],
 }
 
+# Labels used by checks.py that differ from the matcher labels. Normalising
+# them here (instead of silently missing) fixes the "Deep Learning & NLP" /
+# "AI Infrastructure & Evaluation" mismatches that previously never matched.
+_AREA_LABEL_ALIASES: dict[str, str] = {
+    "Deep Learning & NLP": "NLP & Deep Learning",
+    "AI Infrastructure & Evaluation": "AI Infrastructure & Serving",
+}
+
+# A single generic indicator (e.g. "analytics") must not match every AI/ML
+# area. These specific indicators are distinctive enough to match alone.
+_STRONG_AIML_INDICATORS: frozenset[str] = frozenset({
+    "pytorch", "tensorflow", "langgraph", "langchain", "diffusion",
+    "stable diffusion", "transformers", "huggingface", "faiss",
+    "computer vision", "opencv", "rag", "generative ai", "llm",
+    "natural language processing", "neural network", "deep learning",
+    "machine learning", "xgboost", "vector database",
+})
+
+def _aiml_indicator_strength(profile_keywords: frozenset[str]) -> tuple[int, bool]:
+    # Count distinct AI/ML indicators present; note any strong indicator.
+    found = {
+        ind for ind in _AIML_INDICATORS
+        if any(ind in kw.lower() for kw in profile_keywords)
+        or ind in profile_keywords
+    }
+    return len(found), bool(found & _STRONG_AIML_INDICATORS)
+
+def _aiml_matches_profile(profile_keywords: frozenset[str]) -> bool:
+    # True only with >=2 indicators, or 1 strong indicator.
+    count, strong = _aiml_indicator_strength(profile_keywords)
+    return count >= 2 or strong
+
 # Keywords in area labels that are considered inherently AI/ML relevant.
 # If the profile contains ANY ML/data skills, these areas automatically match.
 _AIML_AREAS: frozenset[str] = frozenset({
@@ -264,7 +296,7 @@ def match_profile(
                 if item not in matched_profile_items:
                     matched_profile_items.append(item)
 
-    matched_aiml_areas = [a for a in matched_areas if a in _AIML_AREAS]
+    matched_aiml_areas = [a for a in matched_areas if _AREA_LABEL_ALIASES.get(a, a) in _AIML_AREAS]
     candidate_aiml = _is_aiml_focused(profile, profile_keywords)
 
     if matched_aiml_areas:
@@ -436,14 +468,21 @@ def _extract_profile_evidence_items(profile: dict, cv_text: str | None = None) -
 
 
 def _is_aiml_focused(profile: dict, profile_keywords: frozenset[str]) -> bool:
-    """Return True if candidate's target roles or skills are AI/ML focused."""
+    """Return True if candidate's target roles or skills are AI/ML focused.
+
+    A target role counts only with >=2 indicators or 1 strong indicator,
+    so a role mentioning only a generic word like "analytics" does not
+    mark the whole profile AI/ML-focused.
+    """
     target_roles = [r.lower() for r in _get_nested(profile, "preferences", "target_roles")]
-    if any(any(ind in r for ind in _AIML_INDICATORS) for r in target_roles):
-        return True
+    for role in target_roles:
+        role_kws = frozenset([role])
+        if _aiml_matches_profile(role_kws):
+            return True
     ml_skills = _get_nested(profile, "technical_skills", "ml_and_data")
     if ml_skills:
         return True
-    return any(ind in kw for kw in profile_keywords for ind in _AIML_INDICATORS)
+    return _aiml_matches_profile(profile_keywords)
 
 
 def _has_software_engineering_target(profile: dict) -> bool:
@@ -516,9 +555,9 @@ def _area_matches_profile(area: str, profile_keywords: frozenset[str]) -> bool:
     For AI/ML areas, we check whether the profile has *any* ML/data skill.
     For Software Engineering, we check languages and frameworks.
     """
+    area = _AREA_LABEL_ALIASES.get(area, area)
     if area in _AIML_AREAS:
-        return any(ind in kw.lower() for kw in profile_keywords for ind in _AIML_INDICATORS) or \
-               any(ind in profile_keywords for ind in _AIML_INDICATORS)
+        return _aiml_matches_profile(profile_keywords)
 
     if area == "Software Engineering":
         sw_indicators = {

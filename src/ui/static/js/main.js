@@ -191,11 +191,6 @@ function initModeSelectors() {
       const mode = card.getAttribute("data-mode");
       if (modeInput) modeInput.value = mode;
 
-      // Show/hide tailored preview note if applicable
-      const tailoredNote = document.getElementById("tailoredModeNote");
-      if (tailoredNote) {
-        tailoredNote.style.display = mode === "tailored_cv" ? "block" : "none";
-      }
     });
   });
 }

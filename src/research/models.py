@@ -153,6 +153,72 @@ class ResearchInput:
 # ---------------------------------------------------------------------------
 
 @dataclass
+
+@dataclass
+class StructuredEvidence:
+    """One grounded fact, kept separate from any LLM-generated summary.
+
+    A structured fact carries its own identity and provenance so a draft
+    claim can be traced to exactly one retrieved excerpt. LLM summaries
+    are NEVER converted into StructuredEvidence: they have no source
+    excerpt of their own, and attributing one to the first retrieved URL
+    would fabricate provenance.
+    """
+    fact_id: str
+    claim: str
+    source_url: str
+    source_title: str
+    retrieved_at: str
+    excerpt: str  # exact supporting excerpt from the retrieved page
+    source_type: str
+    verification_status: str  # RETRIEVAL_OK or the actual retrieval status
+    limitations: list[str] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "fact_id": self.fact_id,
+            "claim": self.claim,
+            "source_url": self.source_url,
+            "source_title": self.source_title,
+            "retrieved_at": self.retrieved_at,
+            "excerpt": self.excerpt,
+            "source_type": self.source_type,
+            "verification_status": self.verification_status,
+            "limitations": list(self.limitations),
+            "contradictions": list(self.contradictions),
+        }
+
+
+def build_structured_evidence(evidence: list) -> list:
+    """Build StructuredEvidence only from successfully retrieved items.
+
+    Items without an exact excerpt are skipped: a fact without a quoted
+    excerpt is not grounded evidence, however plausible it sounds.
+    """
+    out = []
+    for i, item in enumerate(evidence or []):
+        if getattr(item, "retrieval_status", "") != RETRIEVAL_OK:
+            continue
+        excerpt = (getattr(item, "extracted_text", "") or "").strip()
+        if not excerpt:
+            continue
+        out.append(StructuredEvidence(
+            fact_id=f"fact-{i + 1:03d}",
+            claim=getattr(item, "claim_supported", "") or "Retrieved company evidence",
+            source_url=getattr(item, "source_url", ""),
+            source_title=getattr(item, "title", ""),
+            retrieved_at=getattr(item, "retrieved_at", ""),
+            excerpt=excerpt[:500],
+            source_type=getattr(item, "source_type", "web_page"),
+            verification_status=getattr(item, "retrieval_status", ""),
+            limitations=list(getattr(item, "limitations", []) or []),
+            contradictions=list(getattr(item, "contradictions", []) or []),
+        ))
+    return out
+
+
+@dataclass
 class ResearchResult:
     """
     Structured output from research_contact().

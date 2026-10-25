@@ -132,13 +132,13 @@ class CachedResearchProvider(ResearchProvider):
         # Check cache first
         cached = self.cache.get_page(url)
         if cached is not None:
-            # Merge requested supports into the returned copy
-            merged_supports = list(set(cached.supports + supports))
-            return dataclasses.replace(
-                cached,
-                source_type=source_type or cached.source_type,
-                supports=merged_supports,
-            )
+            # Return the cached item EXACTLY as retrieved. Previously the
+            # cache replaced source_type with the newly requested type and
+            # merged supports, so a homepage first fetched as
+            # official_website could later be presented as a job_listing
+            # with its original retrieved_at -- mislabelled evidence.
+            # A caller that needs a different source type must fetch fresh.
+            return dataclasses.replace(cached)
 
         # Cache miss: fetch from inner provider
         item = self.provider.fetch(url, source_type, supports)

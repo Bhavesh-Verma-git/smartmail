@@ -13,8 +13,8 @@ check functions or the top-level researcher.
 
 ## HttpPageProvider rules
 
-- Uses requests with a configurable timeout (default 10 s).
-- Follows up to 5 redirects.
+- Uses requests with a configurable timeout (default (3.0 s connect, 5.0 s read)).
+- Follows up to 5 redirects; the citation URL is the FINAL URL after redirects.
 - Sends a plain browser-like User-Agent so well-behaved sites serve HTML.
 - Treats any HTTP error status (4xx, 5xx) as a retrieval error; records
   the status code in retrieval_note.
@@ -95,6 +95,63 @@ class ResearchProvider(ABC):
 
 
 # ---------------------------------------------------------------------------
+# URL safety
+
+def _blocked_url_reason(url: str) -> str | None:
+    """Return a block reason for an unsafe fetch URL, else None.
+
+    Blocks non-http(s) schemes, URLs with embedded credentials, and
+    literal private/loopback/link-local/reserved/multicast addresses.
+    Hostnames are resolved when possible; a resolution failure is not
+    treated as a block (the fetch will fail on its own).
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "unparseable URL"
+    if parsed.scheme not in ("http", "https"):
+        return f"unsupported scheme '{parsed.scheme}'"
+    if parsed.username or parsed.password:
+        return "URL contains embedded credentials"
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return "missing host"
+    try:
+        ip = ipaddress.ip_address(host)
+        candidates = [ip]
+    except ValueError:
+        candidates = []
+        try:
+            for _fam, _typ, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
+                try:
+                    candidates.append(ipaddress.ip_address(sockaddr[0]))
+                except ValueError:
+                    continue
+        except Exception:
+            return None
+    # Block loopback, RFC1918 private nets, link-local, unspecified,
+    # multicast and reserved addresses. Note: ipaddress.is_private is
+    # deliberately NOT used -- it also flags benchmarking/CGNAT ranges
+    # (e.g. 198.18/15) that are not internal service targets, and some
+    # test/sandbox resolvers synthesise those for public names.
+    _rfc1918 = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    )
+    for ip in candidates:
+        if (ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified
+                or any(ip in net for net in _rfc1918)):
+            return f"host resolves to non-public address {ip}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # HTTP implementation
 # ---------------------------------------------------------------------------
 
@@ -143,9 +200,29 @@ class HttpPageProvider(ResearchProvider):
             supports=list(supports),
         )
 
+        # Strict URL validation (SSRF guard for localhost deployment):
+        # only http/https, no embedded credentials, and no literal or
+        # resolved private/loopback/link-local/reserved address. A DNS
+        # failure does not block here -- the request itself will then
+        # fail and be recorded as a retrieval error.
+        blocked = _blocked_url_reason(url)
+        if blocked:
+            item.retrieval_status = RETRIEVAL_BLOCKED
+            item.retrieval_note = "Blocked URL"
+            item.claim_supported = f"URL blocked: {blocked}"
+            item.limitations.append(f"Fetch blocked for {url}: {blocked}.")
+            return item
+
         try:
             response = self._session.get(url, timeout=self._timeout)
             item.retrieval_note = f"HTTP {response.status_code}"
+            # Cite the final URL after redirects, not the requested one:
+            # citing the requested URL when content came from elsewhere
+            # misattributes the evidence.
+            final_url = getattr(response, "url", "") or url
+            if final_url != url:
+                item.source_url = final_url
+                item.retrieval_note += f" (redirected to {final_url})"
 
             # 1. Check for access blocks
             if response.status_code in (401, 403, 429):
@@ -173,10 +250,18 @@ class HttpPageProvider(ResearchProvider):
             is_html = not content_type or "html" in content_type.lower() or "<html" in raw_html.lower() or not raw_html.strip()
 
             if not is_html:
-                item.retrieval_status = RETRIEVAL_OK
+                # A non-HTML response (PDF, JSON, binary) is NOT page
+                # evidence: its raw bytes must not be counted as retrieved
+                # company text. Record it as an error so downstream checks
+                # never treat it as RETRIEVAL_OK evidence.
+                item.retrieval_status = RETRIEVAL_ERROR
                 item.title = f"Non-HTML response ({content_type})"
-                item.extracted_text = raw_html[:MAX_TEXT_CHARS]
-                item.claim_supported = f"Non-HTML resource ({content_type}) retrieved"
+                item.extracted_text = ""
+                item.claim_supported = f"Non-HTML resource ({content_type}); not usable as page evidence"
+                item.limitations.append(
+                    f"Response from {item.source_url} was non-HTML ({content_type}); "
+                    "its content was not used as evidence."
+                )
                 return item
 
             soup = BeautifulSoup(raw_html, "html.parser")

@@ -28,7 +28,6 @@ from src.outreach.send_log import (
 _DRAFTS_DIR = Path("output/.drafts")
 _BATCHES_DIR = Path("output/.batches")
 _SESSION_FILE = Path("output/.session.json")
-_TAILORED_DIR = Path("output/tailored_cvs")
 
 
 def _now_iso() -> str:
@@ -216,9 +215,9 @@ def save_draft_record(
         "mode": draft.mode.value if hasattr(draft.mode, "value") else str(draft.mode),
         "status": draft.status.value if hasattr(draft.status, "value") else str(draft.status),
         "approved": draft.approved,
+        "approval_hash": getattr(draft, "approval_hash", ""),
         "review_required": draft.review_required,
         "review_flags": draft.review_flags,
-        "tailored_cv_path": draft.tailored_cv_path,
         "created_at": getattr(draft, "created_at", _now_iso()),
         "updated_at": _now_iso(),
         "campaign_id": campaign_id,
@@ -383,6 +382,15 @@ def update_draft(
     if not draft_data:
         raise KeyError(f"Draft '{draft_id}' not found.")
 
+    # A draft that was already sent, simulated-sent, or left in an
+    # uncertain state must never be edited back into a sendable draft:
+    # its send history would be rewritten. Create a new draft instead.
+    if draft_data.get("status") in ("SENT", "SIMULATED_SENT", "UNCERTAIN"):
+        raise ValueError(
+            f"Draft '{draft_id}' is already {draft_data.get('status')} and cannot be edited. "
+            "Create a new draft instead of rewriting send history."
+        )
+
     if subject is not None:
         draft_data["subject"] = subject.strip()
     if body is not None:
@@ -394,7 +402,78 @@ def update_draft(
 
     if reset_approval:
         draft_data["approved"] = False
+        draft_data["approval_hash"] = ""
         draft_data["status"] = "DRAFT"
+
+    # Re-run the quality gate on the edited body and persist the new
+    # result on the draft. The gate inputs are reconstructed from the
+    # stored personalization record (the audit trail saved at generation
+    # time), so an edit cannot silently keep a stale "passed" result.
+    # A gate failure after edit forces review_required; final approval
+    # remains a human decision, but it is made against the fresh result,
+    # and the send path verifies the approval hash bound to this body.
+    try:
+        from src.outreach.experience_matcher import CandidateExperienceMatch
+        from src.outreach.models import EmailDraft as _EmailDraft
+        from src.outreach.opportunity_analyzer import CompanyOpportunity
+        from src.outreach.quality_gate import evaluate_personalization_quality
+        from src.profile.loader import load_profile as _load_profile
+        _pr = draft_data.get("personalization_record", {}) or {}
+        _opp = CompanyOpportunity(
+            company_name=draft_data.get("company_name", ""),
+            concrete_finding=_pr.get("company_finding", ""),
+            primary_source_url=_pr.get("evidence_source_url", ""),
+            primary_source_title=_pr.get("evidence_source_title", ""),
+            source_excerpt=_pr.get("source_excerpt", ""),
+            technical_domain=_pr.get("technical_domain", ""),
+            evidence_strength=(
+                "STRONG" if (_pr.get("evidence_source_url") and _pr.get("source_excerpt"))
+                else ("MODERATE" if _pr.get("evidence_source_url") else "WEAK")
+            ),
+        )
+        _match = CandidateExperienceMatch(
+            primary_experience_id="",
+            primary_experience_name=_pr.get("candidate_experience", ""),
+            organization_or_project=_pr.get("candidate_experience", ""),
+            concrete_candidate_work=_pr.get("supporting_cv_evidence", ""),
+            connection_rationale=_pr.get("connection_reasoning", ""),
+            relevant_technologies=draft_data.get("matched_skills", []),
+            is_specific_match=True,
+        )
+        try:
+            _profile = _load_profile("data/master_profile.json")
+        except Exception:
+            _profile = {}
+        _prelim = _EmailDraft(
+            draft_id=draft_id,
+            recipient=draft_data.get("recipient", ""),
+            recipient_name=draft_data.get("recipient_name", ""),
+            company_name=draft_data.get("company_name", ""),
+            subject=draft_data.get("subject", ""),
+            body=draft_data.get("body", ""),
+            attachment_path=draft_data.get("attachment_path", ""),
+            mode=draft_data.get("mode", "uploaded_cv"),
+            review_required=draft_data.get("review_required", False),
+            review_flags=draft_data.get("review_flags", []),
+        )
+        _gate = evaluate_personalization_quality(
+            draft=_prelim, opportunity=_opp, candidate_match=_match, profile=_profile,
+        )
+        _pr["quality_gate_passed"] = _gate.passed
+        _pr["quality_gate_checks"] = _gate.checks
+        _pr["quality_gate_notes"] = _gate.failure_reasons
+        draft_data["personalization_record"] = _pr
+        if not _gate.passed:
+            draft_data["review_required"] = True
+            for _rf in _gate.review_flags_to_add:
+                if _rf not in draft_data.get("review_flags", []):
+                    draft_data.setdefault("review_flags", []).append(_rf)
+    except Exception as _exc:  # Never block an edit on gate reconstruction.
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Quality gate re-run on edit failed: %s", _exc)
+        draft_data["quality_gate_stale"] = True
+
+    if reset_approval:
         sl = send_log or SendLog()
         sl.record_draft(
             draft_id=draft_id,
@@ -433,6 +512,12 @@ def regenerate_draft_content(
     draft_data = get_draft(draft_id)
     if not draft_data:
         raise KeyError(f"Draft '{draft_id}' not found.")
+
+    if draft_data.get("status") in ("SENT", "SIMULATED_SENT", "UNCERTAIN"):
+        raise ValueError(
+            f"Draft '{draft_id}' is already {draft_data.get('status')} and cannot be regenerated. "
+            "Create a new draft instead of rewriting send history."
+        )
 
     from src.profile.loader import load_profile
     from src.research.models import ResearchResult, EvidenceItem, RETRIEVAL_OK
@@ -480,7 +565,14 @@ def regenerate_draft_content(
         ),
     )
 
-    mode = WorkflowMode.TAILORED_CV if draft_data.get("mode") == "tailored_cv" else WorkflowMode.UPLOADED_CV
+    if draft_data.get("mode") == "tailored_cv":
+        raise ValueError(
+            "This draft was created with the removed tailored-CV mode. "
+            "It cannot be regenerated or sent, and it is not converted to "
+            "an uploaded-CV draft, because its attachment was a generated "
+            "file, not your uploaded CV. View it read-only instead."
+        )
+    mode = WorkflowMode.UPLOADED_CV
 
     new_draft = draft_outreach_email(
         profile=profile,
@@ -503,6 +595,7 @@ def regenerate_draft_content(
     draft_data["review_required"] = new_draft.review_required
     draft_data["review_flags"] = new_draft.review_flags
     draft_data["approved"] = False
+    draft_data["approval_hash"] = ""
     draft_data["status"] = "DRAFT"
     draft_data["updated_at"] = _now_iso()
     draft_data["generation_version"] = draft_data.get("generation_version", 1) + 1
@@ -534,8 +627,15 @@ def approve_draft(draft_id: str, send_log: SendLog | None = None) -> dict[str, A
     if not draft_data:
         raise KeyError(f"Draft '{draft_id}' not found.")
 
+    from src.outreach.approval import approval_hash_for, attachment_identity
     draft_data["approved"] = True
     draft_data["status"] = "APPROVED"
+    draft_data["approval_hash"] = approval_hash_for(
+        draft_data.get("recipient", ""), draft_data.get("subject", ""),
+        draft_data.get("body", ""), draft_data.get("attachment_path", ""),
+    )
+    _att_path, _att_sha = attachment_identity(draft_data.get("attachment_path", ""))
+    draft_data["approval_attachment_sha256"] = _att_sha
     draft_data["updated_at"] = _now_iso()
 
     file_path = _DRAFTS_DIR / f"{draft_id}.json"

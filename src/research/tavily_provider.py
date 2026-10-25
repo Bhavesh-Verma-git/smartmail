@@ -107,6 +107,10 @@ class TavilySearchProvider(ResearchProvider):
 
         # Call Tavily REST endpoint with bounded retries
         evidence_items = self._execute_search(query, max_results=max_results)
+        # Bound the cache: previously unbounded, so a long batch could
+        # grow memory without limit (and cache error items indefinitely).
+        if len(self._cache) >= 200:
+            self._cache.pop(next(iter(self._cache)))
         self._cache[cache_key] = evidence_items
         return evidence_items
 
