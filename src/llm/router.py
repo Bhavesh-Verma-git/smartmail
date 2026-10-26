@@ -78,14 +78,18 @@ class LLMRouter:
     ) -> LLMResponse:
         """
         Execute structured JSON generation with Gemini -> Groq fallback.
-        Records fallback reasons in audit metadata.
+        Preserves error context from both primary and fallback attempts.
         """
+        primary_resp: LLMResponse | None = None
+        fallback_resp: LLMResponse | None = None
         primary_failure_reason = ""
+
         # Try Primary (Gemini)
         if self.primary.is_configured:
             resp = self.primary.generate_json(prompt, system_instruction=system_instruction)
             if resp.success:
                 return resp
+            primary_resp = resp
             primary_failure_reason = f"Primary {self.primary.provider_name} failed: {resp.error_message}"
             logger.warning(f"{primary_failure_reason}. Trying fallback...")
 
@@ -95,14 +99,27 @@ class LLMRouter:
             if resp.success:
                 if primary_failure_reason:
                     resp.fallback_reason = primary_failure_reason
+                    resp.primary_error = primary_resp.error_message if primary_resp else ""
                 return resp
+            fallback_resp = resp
             logger.warning(f"Fallback LLM ({self.fallback.provider_name}) failed: {resp.error_message}.")
+
+        err_parts = []
+        if primary_resp:
+            err_parts.append(f"Primary ({self.primary.provider_name}): {primary_resp.error_message}")
+        if fallback_resp:
+            err_parts.append(f"Fallback ({self.fallback.provider_name}): {fallback_resp.error_message}")
+        combined_error = "; ".join(err_parts) if err_parts else "No configured LLM succeeded."
 
         return LLMResponse(
             success=False,
             provider_name="none",
-            error_message="No configured LLM succeeded. Falling back to offline deterministic logic.",
+            error_message=f"No configured LLM succeeded. {combined_error}",
             fallback_reason=primary_failure_reason,
+            primary_error=primary_resp.error_message if primary_resp else "",
+            fallback_error=fallback_resp.error_message if fallback_resp else "",
+            http_status=primary_resp.http_status if primary_resp and primary_resp.http_status else (fallback_resp.http_status if fallback_resp else 0),
+            is_transient=bool((primary_resp and primary_resp.is_transient) or (fallback_resp and fallback_resp.is_transient)),
         )
 
     def generate_text_with_fallback(
@@ -112,14 +129,18 @@ class LLMRouter:
     ) -> LLMResponse:
         """
         Execute plain text generation with Gemini -> Groq fallback.
-        Records fallback reasons in audit metadata.
+        Preserves error context from both primary and fallback attempts.
         """
+        primary_resp: LLMResponse | None = None
+        fallback_resp: LLMResponse | None = None
         primary_failure_reason = ""
+
         # Try Primary (Gemini)
         if self.primary.is_configured:
             resp = self.primary.generate_text(prompt, system_instruction=system_instruction)
             if resp.success:
                 return resp
+            primary_resp = resp
             primary_failure_reason = f"Primary {self.primary.provider_name} failed: {resp.error_message}"
             logger.warning(f"{primary_failure_reason}. Trying fallback...")
 
@@ -129,14 +150,27 @@ class LLMRouter:
             if resp.success:
                 if primary_failure_reason:
                     resp.fallback_reason = primary_failure_reason
+                    resp.primary_error = primary_resp.error_message if primary_resp else ""
                 return resp
+            fallback_resp = resp
             logger.warning(f"Fallback LLM ({self.fallback.provider_name}) failed: {resp.error_message}.")
+
+        err_parts = []
+        if primary_resp:
+            err_parts.append(f"Primary ({self.primary.provider_name}): {primary_resp.error_message}")
+        if fallback_resp:
+            err_parts.append(f"Fallback ({self.fallback.provider_name}): {fallback_resp.error_message}")
+        combined_error = "; ".join(err_parts) if err_parts else "No configured LLM succeeded."
 
         return LLMResponse(
             success=False,
             provider_name="none",
-            error_message="No configured LLM succeeded. Falling back to offline deterministic logic.",
+            error_message=f"No configured LLM succeeded. {combined_error}",
             fallback_reason=primary_failure_reason,
+            primary_error=primary_resp.error_message if primary_resp else "",
+            fallback_error=fallback_resp.error_message if fallback_resp else "",
+            http_status=primary_resp.http_status if primary_resp and primary_resp.http_status else (fallback_resp.http_status if fallback_resp else 0),
+            is_transient=bool((primary_resp and primary_resp.is_transient) or (fallback_resp and fallback_resp.is_transient)),
         )
 
     def extract_company_ai_evidence(

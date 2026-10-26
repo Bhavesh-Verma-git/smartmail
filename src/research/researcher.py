@@ -47,6 +47,7 @@ from src.research.checks import (
     check_technical_relevance,
 )
 from src.research.models import (
+    CompanyFact,
     EvidenceItem,
     ResearchInput,
     ResearchResult,
@@ -61,6 +62,7 @@ from src.research.models import (
     RETRIEVAL_NETWORK_ERROR,
     RETRIEVAL_ERROR,
     APPLICATION_UNKNOWN,
+    validate_excerpt_in_source,
 )
 from src.research.providers import HttpPageProvider, ResearchProvider
 
@@ -338,27 +340,45 @@ def research_contact(
     if not resolved_company and inp.registered_domain and not inp.is_free_provider:
         resolved_company = inp.registered_domain.split(".")[0].capitalize()
 
-    # --- Substantive AI/ML Evidence Summary --------------------------------
+    # --- Substantive AI/ML Evidence Summary & Company Facts ---------------
     ai_evidence_summary: list[dict[str, Any]] = []
+    company_facts: list[CompanyFact] = []
+    llm_derived_summary: str = ""
+
     ok_ext = [e for e in evidence if e.retrieval_status == RETRIEVAL_OK and e.source_type not in ("user_supplied", "notes")]
     for item in ok_ext:
         text = item.extracted_text or ""
-        # Look for sentences containing key AI/ML concepts
+        # Look for sentences containing key AI/ML concepts and concrete capabilities
         sentences = re.split(r"(?<=[.!?])\s+", text)
         for s in sentences:
             s_clean = s.strip()
-            if len(s_clean) > 25 and len(s_clean) < 300:
+            if 25 < len(s_clean) < 350:
                 s_lower = s_clean.lower()
-                for area in ("generative ai", "llm", "rag", "agent", "machine learning", "deep learning", "computer vision", "nlp", "model"):
+                for area in ("generative ai", "llm", "rag", "agent", "machine learning", "deep learning", "computer vision", "nlp", "model", "platform", "pipeline", "governance", "audit", "safety", "guardrail"):
                     if area in s_lower:
-                        ai_evidence_summary.append({
-                            "keyword": area,
-                            "excerpt": s_clean,
-                            "source_url": item.source_url,
-                        })
+                        # Grounding check: validate that excerpt exists in source text
+                        if validate_excerpt_in_source(s_clean, text):
+                            fact_id = f"fact-{len(company_facts) + 1}"
+                            company_facts.append(CompanyFact(
+                                fact_id=fact_id,
+                                statement=s_clean,
+                                source_url=item.source_url,
+                                source_title=item.title,
+                                exact_excerpt=s_clean,
+                                source_type=item.source_type,
+                                retrieval_status=item.retrieval_status,
+                                retrieved_at=item.retrieved_at or EvidenceItem.now_utc(),
+                                validation_status="VALIDATED",
+                                limitations=list(item.limitations),
+                                contradictions=list(item.contradictions),
+                            ))
+                            if len(ai_evidence_summary) < 5:
+                                ai_evidence_summary.append({
+                                    "keyword": area,
+                                    "excerpt": s_clean,
+                                    "source_url": item.source_url,
+                                })
                         break
-            if len(ai_evidence_summary) >= 5:
-                break
 
     # Optional LLM structured analysis of public company evidence
     try:
@@ -381,11 +401,9 @@ def research_contact(
                                 tech_areas.append(ea)
                 summary_snippet = llm_analysis.get("evidence_summary", "")
                 if summary_snippet and isinstance(summary_snippet, str):
-                    ai_evidence_summary.insert(0, {
-                        "keyword": "llm_analysis",
-                        "excerpt": summary_snippet[:300],
-                        "source_url": ok_ext[0].source_url if ok_ext else "",
-                    })
+                    # Store strictly as an LLM-derived summary; NEVER label as verbatim excerpt
+                    # and NEVER prepend to raw source evidence corpus or attribute to a raw URL.
+                    llm_derived_summary = summary_snippet.strip()
     except Exception as exc:
         all_limitations.append(f"Optional LLM extraction skipped: {type(exc).__name__}")
 
@@ -422,6 +440,8 @@ def research_contact(
         recipient_resolution=recipient_res,
         ai_ml_evidence_summary=ai_evidence_summary,
         contradictions=contradictions,
+        company_facts=company_facts,
+        llm_derived_summary=llm_derived_summary,
     )
 
 

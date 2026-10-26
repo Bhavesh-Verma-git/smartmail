@@ -460,34 +460,35 @@ class TestSalutationAndSignature:
 # Section 6: Tailored CV Mode Alignment
 # ---------------------------------------------------------------------------
 
-class TestTailoredCVAlignmentParagraph:
-    """Tailored CV mode surfaces selected project names."""
+class TestUploadedCVModeProjectGrounding:
+    """Uploaded CV mode grounds candidate experience without forcing legacy tailored projects."""
 
-    def test_tailored_mode_primary_project_in_body(self):
+    def test_uploaded_mode_grounded_experience_in_body(self):
         selection = _make_project_selection()
         pipeline = _make_pipeline_result(matched_areas=["AI agents", "LLMs"])
         draft = draft_outreach_email(
             profile=PROFILE,
             recipient_email="hr@example.ai",
             company_name="ExampleAI",
-            mode=WorkflowMode.TAILORED_CV,
+            mode=WorkflowMode.UPLOADED_CV,
             verification_pipeline_result=pipeline,
             project_selection=selection,
         )
-        assert "ControlPlane.ai" in draft.body
+        # Verified experience appears in body
+        assert "Red Panda Games" in draft.body or "applied machine learning" in draft.body
 
-    def test_tailored_mode_secondary_project_in_body(self):
+    def test_uploaded_mode_nlp_experience_in_body(self):
         selection = _make_project_selection()
         pipeline = _make_pipeline_result(matched_areas=["NLP"])
         draft = draft_outreach_email(
             profile=PROFILE,
             recipient_email="hr@example.ai",
             company_name="ExampleAI",
-            mode=WorkflowMode.TAILORED_CV,
+            mode=WorkflowMode.UPLOADED_CV,
             verification_pipeline_result=pipeline,
             project_selection=selection,
         )
-        assert "E-Commerce Price Prediction" in draft.body
+        assert "applied machine learning" in draft.body or "IISER" in draft.body
 
     def test_uploaded_cv_mode_does_not_mention_specific_projects(self):
         """Uploaded CV mode should not name specific projects (they live in the attached file)."""

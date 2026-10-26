@@ -171,13 +171,19 @@ def get_groq_api_keys() -> list[str]:
 
 
 def get_gemini_model() -> str:
-    """Configurable Gemini model identifier (defaults to gemini-2.0-flash)."""
-    return os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    """Configurable Gemini model identifier (defaults to gemini-3.8-flash)."""
+    return os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
 
 
 def get_groq_model() -> str:
-    """Configurable Groq model identifier (defaults to llama-3.3-70b-versatile)."""
-    return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+    """
+    Configurable Groq model identifier (defaults to openai/gpt-oss-120b).
+    Preserves exact configured model name from environment without silent mutation.
+    """
+    raw = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
+    if not raw or raw.lower() in ("none", "null", ""):
+        return "openai/gpt-oss-120b"
+    return raw
 
 
 def get_tavily_timeout() -> int:

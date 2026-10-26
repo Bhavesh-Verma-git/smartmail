@@ -312,61 +312,21 @@ class OutreachWorkflow:
         selection_res: ProjectSelectionResult | None = None
         tailored_cv_res: TailoredCVResult | None = None
 
-        if self._mode == WorkflowMode.UPLOADED_CV:
-            # UPLOADED CV MODE RULES:
-            # 1. Must have an uploaded CV registered.
-            if not self._uploaded_cv_path or not self._uploaded_cv_path.exists():
-                raise RuntimeError(
-                    "Uploaded CV Mode requires an existing CV file. Call set_uploaded_cv() first."
-                )
-            # 2. Verify file remains byte-for-byte unmodified.
-            if not self.verify_uploaded_cv_unmodified():
-                raise RuntimeError("Uploaded CV was unexpectedly altered!")
-
-            # 3. Project selection and CV generation MUST NOT BE INVOKED.
-            self.project_selection_invoked = False
-            self.cv_generation_invoked = False
-
-            attachment_path = str(self._uploaded_cv_path.resolve())
-
-        elif self._mode == WorkflowMode.TAILORED_CV:
-            # TAILORED CV MODE RULES:
-            # 1. Project selection: ControlPlane.ai always first + 2 ranked eligible projects.
-            self.project_selection_invoked = True
-            tech_areas = verification_result.match.matched_areas
-            selection_res = select_projects(
-                profile=self.profile,
-                job_description=job_description or job_url,
-                target_role=effective_role,
-                technical_areas=tech_areas,
+        # UPLOADED CV WORKFLOW (Sole supported mode per Phase 15)
+        # 1. Must have an uploaded CV registered.
+        if not self._uploaded_cv_path or not self._uploaded_cv_path.exists():
+            raise RuntimeError(
+                "Uploaded CV Mode requires an existing CV file. Call set_uploaded_cv() first."
             )
+        # 2. Verify file remains byte-for-byte unmodified.
+        if not self.verify_uploaded_cv_unmodified():
+            raise RuntimeError("Uploaded CV was unexpectedly altered!")
 
-            # 2. Generate separate tailored CV (Markdown + PDF).
-            self.cv_generation_invoked = True
-            tailored_cv_res = generate_tailored_cv(
-                profile=self.profile,
-                selection_result=selection_res,
-                job_description=job_description or job_url,
-                target_role=effective_role,
-                target_company=company_name,
-                technical_areas=tech_areas,
-                output_dir=custom_output_dir,
-            )
+        # 3. Project selection and CV tailoring MUST NOT BE INVOKED.
+        self.project_selection_invoked = False
+        self.cv_generation_invoked = False
 
-            # 3. Use generated CV as attachment; surface error if PDF failed.
-            if tailored_cv_res.pdf_error:
-                return WorkflowResult(
-                    mode=self._mode,
-                    contact_email=recipient_email,
-                    company_name=company_name,
-                    status="ERROR",
-                    verification=verification_result,
-                    selection_result=selection_res,
-                    tailored_cv=tailored_cv_res,
-                    message=f"CV PDF generation failed: {tailored_cv_res.pdf_error}",
-                    error=tailored_cv_res.pdf_error,
-                )
-            attachment_path = tailored_cv_res.file_path
+        attachment_path = str(self._uploaded_cv_path.resolve())
 
         # 4. Draft Outreach Email (Stage 4 Personalized Drafting)
         draft = draft_outreach_email(

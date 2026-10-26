@@ -86,6 +86,9 @@ def _format_result_entry(i: int, wf_res: WorkflowResult) -> dict[str, Any]:
     evidence_list = _format_evidence_list(wf_res)
 
     row_num = wf_res.row_number if wf_res.row_number is not None else (i + 1)
+    raw_vals = getattr(wf_res.contact, "raw_values", {})
+    if not isinstance(raw_vals, dict):
+        raw_vals = {}
 
     return {
         "row_number": row_num,
@@ -116,7 +119,7 @@ def _format_result_entry(i: int, wf_res: WorkflowResult) -> dict[str, Any]:
         "personalization_explanation": getattr(wf_res.draft, "personalization_explanation", "") if wf_res.draft else "",
         "matched_skills": getattr(wf_res.draft, "matched_skills", []) if wf_res.draft else [],
         "matched_projects": getattr(wf_res.draft, "matched_projects", []) if wf_res.draft else [],
-        "original_fields": getattr(wf_res.contact, "raw_values", {}) if wf_res.contact else {},
+        "original_fields": raw_vals,
     }
 
 
@@ -402,9 +405,35 @@ class BackgroundBatchRunner:
             logger.exception("Fatal batch runner crash for batch %s: %s", batch_id, exc)
             try:
                 curr = get_batch_record(batch_id) or {}
+                # Record any contacts that were never completed as ERROR so no contact is left in limbo
+                for i, contact in enumerate(contacts):
+                    if i not in persisted_results_map:
+                        recipient = getattr(getattr(contact, "email_result", None), "normalized_email", "") or getattr(contact, "email", "unknown")
+                        entry = {
+                            "row_number": getattr(contact, "row_number", i + 1),
+                            "status": "ERROR",
+                            "contact_email": recipient,
+                            "company_name": getattr(contact, "company_name", "") or "",
+                            "resolved_company": getattr(contact, "company_name", "") or "",
+                            "supplied_company": getattr(contact, "company_name", "") or "",
+                            "message": f"Batch terminated prematurely: {exc}",
+                            "error": str(exc),
+                            "draft_id": None,
+                            "generation_status": "GENERATION_FAILED",
+                        }
+                        persisted_results_map[i] = entry
+                        errors_list.append({
+                            "row_number": entry["row_number"],
+                            "email": recipient,
+                            "error": str(exc),
+                        })
                 curr["status"] = "ERROR"
                 curr["error"] = str(exc)
                 curr["updated_at"] = _now_iso()
+                curr["errors"] = errors_list
+                curr["results"] = [persisted_results_map[k] for k in sorted(persisted_results_map.keys())]
+                curr["failed_count"] = len(errors_list)
+                curr["processed_count"] = len(persisted_results_map)
                 save_batch_record(batch_id, curr)
             except Exception:
                 pass

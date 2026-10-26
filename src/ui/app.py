@@ -42,9 +42,6 @@ from src.contacts.spreadsheet_importer import (
     inspect_spreadsheet,
     parse_spreadsheet_contacts,
 )
-from src.cv.generator import generate_tailored_cv
-from src.cv.models import ProjectSelectionResult
-from src.cv.selector import select_projects
 from src.outreach.models import DraftStatus, EmailDraft, SendResult, WorkflowMode
 from src.outreach.quality_gate import QUALITY_GATE_CHECKS_METADATA
 from src.outreach.send_log import SendLog
@@ -451,7 +448,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         campaign_id = request.form.get("campaign_id", "").strip() or f"camp_{uuid.uuid4().hex[:8]}"
         job_description = request.form.get("job_description", "").strip()
 
-        mode = WorkflowMode.TAILORED_CV if mode_str == "tailored_cv" else WorkflowMode.UPLOADED_CV
+        # Enforce Uploaded CV Mode unconditionally (Tailored CV retired)
+        mode = WorkflowMode.UPLOADED_CV
 
         # Check uploaded CV availability for Uploaded CV mode
         cv_meta = get_registered_cv_metadata()
@@ -866,7 +864,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             cv_meta=cv_meta,
             candidate_name=candidate_name,
             master_profile=master_profile,
-            tailored_result=None,
         )
 
     @app.route("/cv/upload", methods=["POST"])
@@ -901,66 +898,6 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             return jsonify({"success": True})
         flash("Registered CV has been removed.", "info")
         return redirect(url_for("import_contacts_page"))
-
-    @app.route("/cv/test-tailor", methods=["POST"])
-    def test_cv_tailoring_route() -> str:
-        target_company = request.form.get("target_company", "Acme AI Labs").strip()
-        target_role = request.form.get("target_role", "AI/ML Intern").strip()
-        job_description = request.form.get("job_description", "").strip()
-
-        cv_meta = get_registered_cv_metadata()
-        master_profile = load_profile("data/master_profile.json")
-        candidate_name = master_profile.get("personal_info", {}).get("full_name", "Candidate")
-
-        # Run project selection
-        selection = select_projects(
-            profile=master_profile,
-            job_description=job_description,
-            target_role=target_role,
-        )
-
-        selected_projects = []
-        for p in selection.selected_projects:
-            title = p.get("title", p.get("name", "Selected Project")) if isinstance(p, dict) else getattr(p, "title", "Selected Project")
-            score = p.get("score", 100) if isinstance(p, dict) else getattr(p, "score", 100)
-            reason = (
-                p.get("ranking_reason", p.get("summary", "Selected by relevance algorithm"))
-                if isinstance(p, dict)
-                else getattr(p, "reason", "Selected by relevance algorithm")
-            )
-            selected_projects.append({
-                "name": title,
-                "score": score,
-                "reason": reason,
-            })
-
-        # Run CV generation
-        tailored_res = generate_tailored_cv(
-            profile=master_profile,
-            selection_result=selection,
-            job_description=job_description,
-            target_role=target_role,
-            target_company=target_company,
-        )
-
-        pdf_filename = Path(tailored_res.pdf_path).name if tailored_res.pdf_path else ""
-
-        result_view = {
-            "selected_projects": selected_projects,
-            "content": tailored_res.content,
-            "pdf_path": tailored_res.pdf_path,
-            "pdf_filename": pdf_filename,
-            "pdf_error": tailored_res.pdf_error,
-        }
-
-        return render_template(
-            "cv.html",
-            active_tab="cv",
-            cv_meta=cv_meta,
-            candidate_name=candidate_name,
-            master_profile=master_profile,
-            tailored_result=result_view,
-        )
 
     # -----------------------------------------------------------------------
     # Route: Send Log

@@ -7,6 +7,7 @@ Designed to be completely decoupled from any specific vendor (Gemini, Groq, loca
 from __future__ import annotations
 
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -112,12 +113,246 @@ class LLMResponse:
     provider_name: str = ""
     model_name: str = ""
     error_message: str = ""
-    error_category: str = ""  # "RATE_LIMIT", "AUTH_FAILURE", "TIMEOUT", "SERVER_ERROR", "INVALID_REQUEST", "PARSE_ERROR", ""
+    error_category: str = ""  # "RATE_LIMIT", "AUTH_FAILURE", "TIMEOUT", "SERVER_ERROR", "INVALID_REQUEST", "PARSE_ERROR", "EMPTY_RESPONSE", "TRUNCATED_RESPONSE", "SAFETY_BLOCKED"
     is_rate_limited: bool = False
     is_auth_error: bool = False
     used_key_masked: str = ""
     retries_attempted: int = 0
     fallback_reason: str = ""
+    http_status: int = 0
+    is_transient: bool = False
+    primary_error: str = ""
+    fallback_error: str = ""
+    finish_reason: str = ""
+    circuit_open: bool = False
+
+
+class CircuitBreaker:
+    """
+    Thread-safe circuit breaker preventing cascading failures, repeated permanent errors,
+    and quota thrashing across concurrent batch workers.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        cooldown_seconds: float = 30.0,
+        provider_name: str = "",
+    ) -> None:
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+        self.provider_name = provider_name
+        self._lock = threading.Lock()
+        self._state: str = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self._consecutive_failures: int = 0
+        self._last_failure_time: float = 0.0
+        self._trip_reason: str = ""
+        self._is_permanent: bool = False
+
+    @property
+    def state(self) -> str:
+        with self._lock:
+            if self._state == "OPEN":
+                if self._is_permanent:
+                    return "OPEN"
+                if time.time() - self._last_failure_time >= self.cooldown_seconds:
+                    self._state = "HALF_OPEN"
+                    return "HALF_OPEN"
+            return self._state
+
+    def allow_request(self) -> tuple[bool, str]:
+        """Check if request is allowed. Returns (allowed, reason_if_blocked)."""
+        st = self.state
+        with self._lock:
+            if st == "OPEN":
+                perm_suffix = " (Permanent configuration error; will not retry)" if self._is_permanent else f" (Cooldown remaining: {max(0.0, round(self.cooldown_seconds - (time.time() - self._last_failure_time), 1))}s)"
+                return False, f"Circuit for {self.provider_name} is OPEN: {self._trip_reason}{perm_suffix}"
+            return True, ""
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._state = "CLOSED"
+            self._consecutive_failures = 0
+            self._trip_reason = ""
+            self._is_permanent = False
+
+    def record_failure(
+        self,
+        reason: str,
+        is_permanent: bool = False,
+        cooldown_override: float | None = None,
+    ) -> None:
+        with self._lock:
+            self._last_failure_time = time.time()
+            if is_permanent:
+                self._state = "OPEN"
+                self._is_permanent = True
+                self._trip_reason = reason
+                return
+
+            self._consecutive_failures += 1
+            if cooldown_override and cooldown_override > 0:
+                self.cooldown_seconds = min(cooldown_override, 300.0)
+
+            if self._consecutive_failures >= self.failure_threshold or (cooldown_override and cooldown_override > 10):
+                self._state = "OPEN"
+                self._trip_reason = reason
+
+    def reset(self) -> None:
+        with self._lock:
+            self._state = "CLOSED"
+            self._consecutive_failures = 0
+            self._trip_reason = ""
+            self._is_permanent = False
+
+
+class SharedRateLimiter:
+    """Thread-safe token bucket rate limiter to space requests across batch workers."""
+
+    def __init__(self, min_interval_seconds: float = 0.5) -> None:
+        self.min_interval = min_interval_seconds
+        self._last_call_time = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self.min_interval <= 0:
+                self._last_call_time = time.time()
+                return
+            now = time.time()
+            elapsed = now - self._last_call_time
+            if 0 < elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self._last_call_time = time.time()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._last_call_time = 0.0
+
+
+_circuit_breakers: dict[str, CircuitBreaker] = {}
+_circuit_lock = threading.Lock()
+
+
+def get_circuit_breaker(provider_name: str, failure_threshold: int = 3, cooldown_seconds: float = 30.0) -> CircuitBreaker:
+    """Retrieve or create the shared CircuitBreaker singleton for a provider."""
+    with _circuit_lock:
+        if provider_name not in _circuit_breakers:
+            _circuit_breakers[provider_name] = CircuitBreaker(
+                failure_threshold=failure_threshold,
+                cooldown_seconds=cooldown_seconds,
+                provider_name=provider_name,
+            )
+        return _circuit_breakers[provider_name]
+
+
+def reset_all_circuit_breakers() -> None:
+    """Reset all circuit breaker singletons to CLOSED state (useful for tests and manual admin reset)."""
+    with _circuit_lock:
+        for cb in _circuit_breakers.values():
+            cb.reset()
+
+
+_rate_limiters: dict[str, SharedRateLimiter] = {}
+_rate_lock = threading.Lock()
+_default_rate_limit_interval: float = 0.5
+
+
+def get_rate_limiter(provider_name: str, min_interval_seconds: float | None = None) -> SharedRateLimiter:
+    """Retrieve or create the shared SharedRateLimiter singleton for a provider."""
+    with _rate_lock:
+        if provider_name not in _rate_limiters:
+            interval = min_interval_seconds if min_interval_seconds is not None else _default_rate_limit_interval
+            _rate_limiters[provider_name] = SharedRateLimiter(min_interval_seconds=interval)
+        return _rate_limiters[provider_name]
+
+
+def reset_all_rate_limiters(min_interval_seconds: float | None = None) -> None:
+    """Reset all rate limiter singletons (useful for tests)."""
+    global _default_rate_limit_interval
+    with _rate_lock:
+        if min_interval_seconds is not None:
+            _default_rate_limit_interval = min_interval_seconds
+        for rl in _rate_limiters.values():
+            rl.reset()
+            if min_interval_seconds is not None:
+                rl.min_interval = min_interval_seconds
+
+
+
+def parse_retry_after(header_val: str | None, default_delay: float = 1.0, max_delay: float = 5.0) -> float:
+    """Safely parse Retry-After HTTP header value into seconds bounded to max_delay."""
+    if not header_val:
+        return default_delay
+    try:
+        val = float(str(header_val).strip())
+        return max(0.1, min(val, max_delay))
+    except (ValueError, TypeError):
+        return default_delay
+
+
+def safe_parse_llm_json(
+    raw_text: str,
+    finish_reason: str = "",
+) -> tuple[dict[str, Any] | None, str, str]:
+    """
+    Safely extract and parse JSON from LLM output.
+    Returns:
+        (parsed_dict, error_category, error_message)
+    """
+    if not raw_text or not raw_text.strip():
+        if finish_reason in ("SAFETY", "RECITATION", "BLOCKLIST"):
+            return None, "SAFETY_BLOCKED", f"LLM content generation blocked by safety policy (finishReason: {finish_reason})."
+        return None, "EMPTY_RESPONSE", "LLM returned an empty response."
+
+    # If truncated by token limits
+    if finish_reason in ("MAX_TOKENS", "length"):
+        return None, "TRUNCATED_RESPONSE", "LLM output was truncated due to output token limit."
+
+    text = raw_text.strip()
+
+    # 1. First attempt: Direct JSON parse
+    import json
+    import re
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed, "", ""
+        return {"data": parsed}, "", ""
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Second attempt: Markdown code fence extraction (```json ... ```) with or without preamble
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if match:
+        fenced_content = match.group(1).strip()
+        try:
+            parsed = json.loads(fenced_content)
+            if isinstance(parsed, dict):
+                return parsed, "", ""
+            return {"data": parsed}, "", ""
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Third attempt: Substring between first '{' and last '}'
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidate_json = text[first_brace : last_brace + 1].strip()
+        try:
+            parsed = json.loads(candidate_json)
+            if isinstance(parsed, dict):
+                return parsed, "", ""
+            return {"data": parsed}, "", ""
+        except json.JSONDecodeError as exc:
+            return None, "PARSE_ERROR", f"Malformed JSON: {exc}"
+
+    # If it starts with '{' but has no closing '}', it is clearly truncated
+    if first_brace != -1 and last_brace <= first_brace:
+        return None, "TRUNCATED_RESPONSE", "LLM output was truncated before closing JSON structure."
+
+    return None, "PARSE_ERROR", f"Could not parse valid JSON structure: {raw_text[:100]}..."
 
 
 class LLMProvider(ABC):

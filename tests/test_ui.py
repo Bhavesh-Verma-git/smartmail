@@ -308,26 +308,24 @@ def test_unconfigured_gmail_reports_honest_error(client: FlaskClient, test_send_
 # CV Settings & Tailoring Preview Tests
 # ---------------------------------------------------------------------------
 
-def test_cv_settings_page_and_tailoring_preview(client: FlaskClient):
-    """CV settings page displays uploaded CV details and runs tailored CV generation preview."""
+def test_cv_settings_page_uploaded_mode_only(client: FlaskClient):
+    """CV settings page displays uploaded CV details and enforces uploaded-CV-only workflow (Phase 15)."""
     res = client.get("/cv")
     assert res.status_code == 200
     html = res.data.decode("utf-8")
-    assert "Uploaded CV Mode" in html
-    assert "Tailored CV Mode" in html
+    assert "Uploaded CV" in html
     assert "SHA-256 Digest" in html
+    # Tailored CV Mode UI must not be advertised or present
+    assert "Tailored CV Mode" not in html
 
-    # Test Tailored CV generator test form
+    # Tailored CV generator test endpoint must be removed / return 404
     tailor_data = {
         "target_company": "Apex Deep Learning",
         "target_role": "AI/ML Intern",
         "job_description": "PyTorch, diffusion models, computer vision, distributed training",
     }
     tailor_res = client.post("/cv/test-tailor", data=tailor_data)
-    assert tailor_res.status_code == 200
-    tailor_html = tailor_res.data.decode("utf-8")
-    assert "ControlPlane.ai" in tailor_html
-    assert "Generated Markdown Content" in tailor_html
+    assert tailor_res.status_code == 404
 
 
 # ---------------------------------------------------------------------------

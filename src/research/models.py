@@ -31,8 +31,10 @@ application_status:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Status constants
@@ -176,6 +178,8 @@ class ResearchResult:
     recipient_resolution         RecipientResolution object with inferred/verified name.
     ai_ml_evidence_summary       Detailed excerpts of genuine AI/ML products or engineering.
     contradictions               List of contradictions detected across sources.
+    company_facts                Structured verifiable company facts grounded in source passages.
+    llm_derived_summary          Optional LLM-derived summary kept strictly separate from raw evidence.
     """
     company_identity_status: str = UNKNOWN
     domain_relationship_status: str = UNKNOWN
@@ -190,3 +194,60 @@ class ResearchResult:
     recipient_resolution: Any = None
     ai_ml_evidence_summary: list[dict[str, Any]] = field(default_factory=list)
     contradictions: list[str] = field(default_factory=list)
+    company_facts: list[CompanyFact] = field(default_factory=list)
+    llm_derived_summary: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Company Fact & Provenance Validation
+# ---------------------------------------------------------------------------
+
+def validate_excerpt_in_source(excerpt: str, source_text: str) -> bool:
+    """
+    Validate that an excerpt actually appears as a contiguous or near-verbatim
+    span in the source text using whitespace-normalized matching.
+    """
+    if not excerpt or not source_text:
+        return False
+    norm_excerpt = re.sub(r"\s+", " ", excerpt.strip().lower())
+    norm_source = re.sub(r"\s+", " ", source_text.strip().lower())
+    if not norm_excerpt:
+        return False
+    return norm_excerpt in norm_source
+
+
+@dataclass
+class CompanyFact:
+    """
+    Structured, verifiable company fact grounded in an exact retrieved source passage.
+
+    Fields
+    ------
+    fact_id            Stable identifier for provenance tracking (e.g. 'fact-001').
+    statement          Concise factual statement regarding what the company builds/does.
+    source_url         Original URL where the evidence passage was retrieved.
+    source_title       Title of the source document/page.
+    exact_excerpt      Verbatim excerpt extracted from source page.
+    source_type        Source category: 'official_website', 'careers_page', 'tech_blog', etc.
+    retrieval_status   Status code of retrieval (e.g. RETRIEVAL_OK).
+    retrieved_at       UTC timestamp of retrieval.
+    validation_status  'VALIDATED' if verbatim span verified in source; 'REJECTED' or 'UNVERIFIED'.
+    limitations        Limitations or scope constraints.
+    contradictions     Any contradictions detected.
+    """
+    fact_id: str
+    statement: str
+    source_url: str
+    source_title: str = ""
+    exact_excerpt: str = ""
+    source_type: str = "web_page"
+    retrieval_status: str = RETRIEVAL_OK
+    retrieved_at: str = ""
+    validation_status: str = "VALIDATED"
+    limitations: list[str] = field(default_factory=list)
+    contradictions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        from dataclasses import asdict
+        return asdict(self)
+

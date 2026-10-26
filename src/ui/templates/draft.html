@@ -619,9 +619,15 @@
             <div class="evidence-item-card" style="margin-bottom: 0.75rem;">
               <div class="evidence-item-header">
                 <div>
-                  <a href="{{ ev.source_url }}" target="_blank" rel="noopener noreferrer" class="evidence-source-link">
-                    {{ ev.source_url }}
-                  </a>
+                  {% if ev.source_url and (ev.source_url.startswith('http://') or ev.source_url.startswith('https://')) %}
+                    <a href="{{ ev.source_url }}" target="_blank" rel="noopener noreferrer" class="evidence-source-link" style="word-break: break-all;">
+                      {{ ev.source_url }}
+                    </a>
+                  {% else %}
+                    <span class="evidence-source-link" style="word-break: break-all;">
+                      {{ ev.source_url }}
+                    </span>
+                  {% endif %}
                   <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
                     Type: <code>{{ ev.source_type or 'web_page' }}</code> &bull; <em>{{ ev.title or 'Untitled' }}</em>
                   </div>

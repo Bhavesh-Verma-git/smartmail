@@ -160,13 +160,9 @@
       <div class="form-group">
         <label class="form-label">Workflow Mode</label>
         <div class="mode-selector">
-          <div class="mode-card selected" id="modeCardUploaded" data-mode="uploaded_cv">
-            <div class="mode-title">Uploaded CV Mode</div>
-            <div class="mode-desc">Preserves your registered CV byte-for-byte. Recommended for real outreach.</div>
-          </div>
-          <div class="mode-card" id="modeCardTailored" data-mode="tailored_cv">
-            <div class="mode-title">Tailored CV Mode</div>
-            <div class="mode-desc">Selects relevant projects from master profile and generates a tailored PDF.</div>
+          <div class="mode-card selected" id="modeCardUploaded" data-mode="uploaded_cv" style="cursor: default; width: 100%;">
+            <div class="mode-title">Uploaded CV Mode (Enforced)</div>
+            <div class="mode-desc">Preserves your registered candidate CV byte-for-byte. Attachment integrity strictly verified.</div>
           </div>
         </div>
       </div>
@@ -606,17 +602,14 @@
 
     btnBackToStep1.addEventListener("click", () => setWizardStep(1));
 
-    // Mode cards toggle
-    document.getElementById("modeCardUploaded").addEventListener("click", () => {
-      document.getElementById("modeCardUploaded").classList.add("selected");
-      document.getElementById("modeCardTailored").classList.remove("selected");
-      document.getElementById("formWorkflowMode").value = "uploaded_cv";
-    });
-    document.getElementById("modeCardTailored").addEventListener("click", () => {
-      document.getElementById("modeCardTailored").classList.add("selected");
-      document.getElementById("modeCardUploaded").classList.remove("selected");
-      document.getElementById("formWorkflowMode").value = "tailored_cv";
-    });
+    // Mode cards toggle (Uploaded CV enforced)
+    const uploadedCard = document.getElementById("modeCardUploaded");
+    if (uploadedCard) {
+      uploadedCard.addEventListener("click", () => {
+        uploadedCard.classList.add("selected");
+        document.getElementById("formWorkflowMode").value = "uploaded_cv";
+      });
+    }
 
     contactsDropzone.addEventListener("click", () => contactsFileInput.click());
 

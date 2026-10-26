@@ -245,31 +245,28 @@ def cmd_run(args: argparse.Namespace, mode_name: str) -> int:
     campaign_id = getattr(args, "campaign", "")
     send_log = SendLog(db_path="data/send_log.db")
 
-    if mode_name == "uploaded":
-        mode = WorkflowMode.UPLOADED_CV
-        session = _load_session()
-        cv_path = getattr(args, "cv", None) or session.get("uploaded_cv_path")
-        if not cv_path:
-            print(
-                "ERROR: No CV registered. Run: python -m src.cli upload-cv --file <path>",
-                file=sys.stderr,
-            )
-            return 1
-        workflow = OutreachWorkflow(
-            default_mode=mode,
-            uploaded_cv_path=cv_path,
-            dry_run=True,
-            send_log=send_log,
-            campaign_id=campaign_id,
+    if mode_name != "uploaded":
+        print(
+            "NOTICE: Tailored CV generation has been removed. Running in Uploaded CV Mode using your registered CV.",
+            file=sys.stderr,
         )
-    else:
-        mode = WorkflowMode.TAILORED_CV
-        workflow = OutreachWorkflow(
-            default_mode=mode,
-            dry_run=True,
-            send_log=send_log,
-            campaign_id=campaign_id,
+
+    mode = WorkflowMode.UPLOADED_CV
+    session = _load_session()
+    cv_path = getattr(args, "cv", None) or session.get("uploaded_cv_path")
+    if not cv_path:
+        print(
+            "ERROR: No CV registered. Run: python -m src.cli upload-cv --file <path>",
+            file=sys.stderr,
         )
+        return 1
+    workflow = OutreachWorkflow(
+        default_mode=mode,
+        uploaded_cv_path=cv_path,
+        dry_run=True,
+        send_log=send_log,
+        campaign_id=campaign_id,
+    )
 
     print(f"\n[Workflow: {mode_name.upper()} CV MODE]")
     print(f"Contact: {contact.contact_name} <{contact.email_result.normalized_email}>")

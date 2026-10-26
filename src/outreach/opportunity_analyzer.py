@@ -20,7 +20,22 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.research.models import EvidenceItem, ResearchResult, RETRIEVAL_OK
+from src.research.models import (
+    APPLICATION_CLOSED,
+    APPLICATION_OPEN,
+    APPLICATION_UNKNOWN,
+    CompanyFact,
+    EvidenceItem,
+    FOUND,
+    NOT_APPLICABLE,
+    NOT_FOUND,
+    ResearchResult,
+    RETRIEVAL_OK,
+    REVIEW,
+    SUPPORTED,
+    UNKNOWN,
+    validate_excerpt_in_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +67,13 @@ class CompanyOpportunity:
     internship_details: str = ""
     uncertainties: list[str] = field(default_factory=list)
     key_products_or_initiatives: list[str] = field(default_factory=list)
+    company_facts: list[CompanyFact] = field(default_factory=list)
+    primary_fact_id: str = ""
 
     @property
     def is_grounded(self) -> bool:
         """True if the concrete finding is supported by at least one retrieved source."""
-        return bool(self.concrete_finding and (self.primary_source_url or self.source_excerpt))
+        return bool(self.concrete_finding and (self.primary_source_url or self.source_excerpt or self.company_facts))
 
 
 def sanitize_evidence_text(text: str) -> str:
@@ -223,32 +240,71 @@ def _classify_technical_domain(text: str) -> str:
     return DOMAIN_NONE
 
 
+def _extract_verbatim_segments(text: str) -> list[str]:
+    """
+    Split text into candidate verbatim segments bounded by sentences, newlines,
+    pipe delimiters, or standard web navigation boundaries.
+    Guarantees every candidate segment is an exact contiguous or near-verbatim
+    span in the source text.
+    """
+    if not text:
+        return []
+    # Strip leading/trailing bracketed omission markers like ([...]) or [...]
+    t = re.sub(r"^\s*(\(\s*\[\s*\.\.\.\s*\]\s*\)|\[\s*\.\.\.\s*\]|\(\s*\.\.\.\s*\))\s*", "", text)
+    raw_parts = re.split(r"(?<=[.!?])\s+|\n+|(?<=\s)[|]\s+", t)
+    bp_markers = (
+        "Skip to content", "Launch offer", "Cookie Policy", "Accept Cookies",
+        "Privacy Policy", "All rights reserved", "Terms of Service", "Terms of Use",
+        "Book a demo", "Start free trial", "Nothing charged for 30"
+    )
+    candidates: list[str] = []
+    for part in raw_parts:
+        part_str = part.strip()
+        if not part_str:
+            continue
+        subparts = [part_str]
+        for marker in bp_markers:
+            next_subparts = []
+            for sp in subparts:
+                if marker.lower() in sp.lower():
+                    pieces = re.split(re.escape(marker), sp, flags=re.IGNORECASE)
+                    for piece in pieces:
+                        if piece.strip():
+                            next_subparts.append(piece.strip())
+                else:
+                    next_subparts.append(sp)
+            subparts = next_subparts
+
+        for sp in subparts:
+            clean_sp = re.sub(r"^[\s,;:–—\.\(\)\[\]]+|[\s,;:–—\.\(\)\[\]]+$", "", sp).strip()
+            if 25 <= len(clean_sp) <= 350 and validate_excerpt_in_source(clean_sp, text):
+                candidates.append(clean_sp)
+    return candidates
+
+
 def _extract_concrete_sentence(
     extracted_text: str,
     domain: str,
     company_name: str,
 ) -> str:
     """
-    Extract the most concrete, informative sentence describing what the company builds.
+    Extract the most concrete, informative verbatim segment describing what the company builds.
     Prefers descriptive sentences with verbs like 'builds', 'develops', 'provides', 'engineers'.
     """
     if not extracted_text:
         return ""
 
-    # Split into sentences
-    raw_sentences = re.split(r"(?<=[.!?])\s+", extracted_text)
+    segments = _extract_verbatim_segments(extracted_text)
+    if not segments:
+        return ""
+
     candidates: list[tuple[int, str]] = []
-
     comp_clean = company_name.lower().strip() if company_name else ""
-
-    action_verbs = ("builds", "build", "develops", "develop", "provides", "provide", "engineers", "architects", "offers", "delivers", "designs", "specializes in", "is a", "is the")
+    action_verbs = ("builds", "build", "develops", "develop", "provides", "provide", "engineers", "architects", "offers", "delivers", "designs", "specializes in", "is a", "is the", "answers", "automates", "powers")
     skip_phrases = ("cookie", "privacy policy", "all rights reserved", "terms of service", "sign in", "subscribe", "book a demo", "contact us", "copyright", "cart", "checkout")
 
-    for s in raw_sentences:
-        s_clean = _clean_text(s)
+    for s_clean in segments:
         s_lower = s_clean.lower()
-        if len(s_clean) < 30 or len(s_clean) > 350:
-            continue
         if any(skip in s_lower for skip in skip_phrases):
             continue
 
@@ -262,11 +318,11 @@ def _extract_concrete_sentence(
         # Domain alignment
         if domain == DOMAIN_GOVERNANCE_SAFETY and any(k in s_lower for k in ("governance", "responsible", "audit", "guardrail", "risk", "compliance")):
             score += 5
-        elif domain == DOMAIN_RAG_AGENTS and any(k in s_lower for k in ("rag", "retrieval", "agent", "assistant", "chatbot", "workflow")):
+        elif domain == DOMAIN_RAG_AGENTS and any(k in s_lower for k in ("rag", "retrieval", "agent", "assistant", "chatbot", "workflow", "crm", "whatsapp", "lead")):
             score += 5
-        elif domain == DOMAIN_DIFFUSION_VISION and any(k in s_lower for k in ("diffusion", "image", "vision", "3d", "media")):
+        elif domain == DOMAIN_DIFFUSION_VISION and any(k in s_lower for k in ("diffusion", "image", "vision", "3d", "media", "mesh")):
             score += 5
-        elif domain == DOMAIN_NLP_LINGUISTICS and any(k in s_lower for k in ("nlp", "language", "embedding", "text")):
+        elif domain == DOMAIN_NLP_LINGUISTICS and any(k in s_lower for k in ("nlp", "language", "embedding", "text", "resume", "ats", "scoring")):
             score += 5
         elif domain == DOMAIN_ML_DATA_SYSTEMS and any(k in s_lower for k in ("pipeline", "etl", "predictive", "mlops")):
             score += 5
@@ -278,13 +334,12 @@ def _extract_concrete_sentence(
         candidates.sort(key=lambda x: x[0], reverse=True)
         return candidates[0][1]
 
-    # Fallback to first informative sentence
-    for s in raw_sentences:
-        s_clean = _clean_text(s)
+    # Fallback to first informative segment
+    for s_clean in segments:
         if 40 <= len(s_clean) <= 250 and not any(skip in s_clean.lower() for skip in skip_phrases):
             return s_clean
 
-    return ""
+    return segments[0]
 
 
 def analyze_company_opportunity(
@@ -322,38 +377,51 @@ def analyze_company_opportunity(
             uncertainties=uncertainties,
         )
 
-    # 1. Gather successful evidence items
+    # 1. Gather successful evidence items (excluding user notes)
     evidence_items: list[EvidenceItem] = [
         e for e in getattr(research_result, "evidence", [])
         if e.retrieval_status == RETRIEVAL_OK and e.source_type not in ("user_supplied", "notes")
     ]
 
-    # Combine text from all retrieved pages
+    # Combine text from all retrieved pages strictly from raw source text
     combined_corpus = " ".join(e.extracted_text or "" for e in evidence_items)
     combined_titles = " ".join(e.title or "" for e in evidence_items)
-    full_text = f"{combined_titles} {combined_corpus}"
+    full_text = f"{combined_titles} {combined_corpus}".strip()
 
-    # Also check ai_ml_evidence_summary
-    raw_evidence_summary = getattr(research_result, "ai_ml_evidence_summary", None)
-    summary_snippets: list[str] = []
-    if isinstance(raw_evidence_summary, str) and raw_evidence_summary.strip():
-        summary_snippets.append(raw_evidence_summary.strip())
-        evidence_summaries: list[dict[str, Any]] = [{"excerpt": raw_evidence_summary.strip(), "source_url": ""}]
-    elif isinstance(raw_evidence_summary, list):
-        evidence_summaries = raw_evidence_summary
-        for item in evidence_summaries:
-            if isinstance(item, dict) and item.get("excerpt"):
-                summary_snippets.append(item.get("excerpt", ""))
-    else:
-        evidence_summaries = []
+    # Retrieve or build validated CompanyFact records
+    existing_facts = getattr(research_result, "company_facts", [])
+    company_facts: list[CompanyFact] = []
 
-    if summary_snippets:
-        full_text = f"{' '.join(summary_snippets)} {full_text}"
+    if existing_facts:
+        company_facts = [f for f in existing_facts if isinstance(f, CompanyFact) and f.validation_status == "VALIDATED"]
+
+    # If no CompanyFacts exist on research_result (e.g. from fixtures or mocks), extract and validate them
+    if not company_facts and evidence_items:
+        for e in evidence_items:
+            t = e.extracted_text or ""
+            segments = _extract_verbatim_segments(t)
+            for s_clean in segments:
+                if 25 <= len(s_clean) <= 350 and validate_excerpt_in_source(s_clean, t):
+                    s_lower = s_clean.lower()
+                    if any(k in s_lower for k in ("build", "develop", "provide", "engineer", "architect", "platform", "model", "rag", "agent", "governance", "diffusion", "vision", "nlp", "pipeline", "crm", "whatsapp", "lead", "assistant", "workflow", "system", "search", "database", "analytics", "classification", "evaluation")):
+                        fid = f"fact-{len(company_facts) + 1}"
+                        company_facts.append(CompanyFact(
+                            fact_id=fid,
+                            statement=s_clean,
+                            source_url=e.source_url,
+                            source_title=e.title,
+                            exact_excerpt=s_clean,
+                            source_type=e.source_type,
+                            retrieval_status=e.retrieval_status,
+                            retrieved_at=e.retrieved_at,
+                            validation_status="VALIDATED",
+                            limitations=list(e.limitations),
+                            contradictions=list(e.contradictions),
+                        ))
 
     # Check for empty evidence
-    if not full_text.strip():
+    if not full_text:
         uncertainties.append("Retrieved pages contain no extractable text or research failed.")
-        # Check if matched_areas was provided as minimal input
         if matched_areas:
             concrete = f"focus in {', '.join(matched_areas)}"
             domain_class = _classify_technical_domain(concrete)
@@ -372,104 +440,111 @@ def analyze_company_opportunity(
             uncertainties=uncertainties,
         )
 
-    # 2. Determine primary technical domain
+    # 2. Determine primary technical domain as tentative routing metadata
     domain_class = _classify_technical_domain(full_text)
 
-    # 3. Find primary source URL and title
+    # 3. Select primary fact and extract primary source URL, title, and excerpt
     primary_url = ""
     primary_title = ""
     best_excerpt = ""
+    primary_fact_id = ""
 
-    # Priority 1: Check ai_ml_evidence_summary for relevant excerpts
-    for s_item in evidence_summaries:
-        if isinstance(s_item, dict):
-            exc = s_item.get("excerpt", "")
-            src = s_item.get("source_url", "")
-            if exc and len(exc) > 30:
-                s_domain = _classify_technical_domain(exc)
-                if s_domain == domain_class or domain_class == DOMAIN_GENERAL_AI:
-                    best_excerpt = exc
-                    primary_url = src
-                    break
+    if company_facts:
+        # Rank company facts: prefer official_website/careers_page and domain match
+        def fact_score(f: CompanyFact) -> int:
+            sc = 0
+            if f.source_type in ("official_website", "careers_page", "tech_blog"):
+                sc += 10
+            if _classify_technical_domain(f.exact_excerpt) == domain_class:
+                sc += 15
+            if clean_name.lower() in f.exact_excerpt.lower():
+                sc += 5
+            return sc
 
-    # Priority 2: Extract from evidence items
-    if not best_excerpt and evidence_items:
-        # Search evidence items for best sentence
+        sorted_facts = sorted(company_facts, key=fact_score, reverse=True)
+        primary_fact = sorted_facts[0]
+        primary_fact_id = primary_fact.fact_id
+        primary_url = primary_fact.source_url
+        primary_title = primary_fact.source_title
+        best_excerpt = primary_fact.exact_excerpt
+    elif evidence_items:
+        # Fallback to direct sentence extraction from evidence items
         for item in evidence_items:
             t = item.extracted_text or ""
             sentence = _extract_concrete_sentence(t, domain_class, clean_name)
-            if sentence:
+            if sentence and validate_excerpt_in_source(sentence, t):
                 best_excerpt = sentence
                 primary_url = item.source_url
                 primary_title = item.title
                 break
+        if not primary_url:
+            primary_url = evidence_items[0].source_url
+            primary_title = evidence_items[0].title
 
-    # If primary_url is still empty, pick first evidence item
-    if not primary_url and evidence_items:
-        primary_url = evidence_items[0].source_url
-        primary_title = evidence_items[0].title
-
-    # 4. Synthesize concrete finding (clean, substantive 1-line description)
+    # 4. Synthesize concrete finding (strictly grounded in verified facts, no fabricated claims)
     concrete_finding = ""
+    ft_lower = full_text.lower()
+    exc_lower = (best_excerpt or "").lower()
 
-    # Generalized finding synthesis based on verified evidence content
     if domain_class == DOMAIN_GOVERNANCE_SAFETY:
-        ft_gov = full_text.lower()
-        if any(k in ft_gov for k in ("human-in-command", "governed agentic", "versioned run", "sovereign")):
-            concrete_finding = "building governed agentic AI governance systems with versioned audit trails, human-in-command controls, and enterprise deployment frameworks"
-        elif any(k in ft_gov for k in ("copilot", "domain copilots", "evaluation", "benchmarking")):
-            concrete_finding = "developing enterprise AI evaluation frameworks, guardrails, and domain copilots for regulated and industrial settings"
-        elif any(k in ft_gov for k in ("trust & responsible ai", "risk detection", "audit-ready", "tamper-evident")):
+        if any(k in exc_lower for k in ("human-in-command", "governed agentic", "versioned run", "sovereign", "audit trail")):
+            concrete_finding = "building governed agentic AI governance systems with versioned audit trails and human-in-command controls"
+        elif any(k in exc_lower for k in ("copilot", "domain copilots", "evaluation", "benchmarking")):
+            concrete_finding = "developing AI evaluation frameworks, guardrails, and domain copilots"
+        elif any(k in exc_lower for k in ("trust & responsible ai", "risk detection", "audit-ready", "tamper-evident")):
             concrete_finding = "developing automated risk detection, tamper-evident audit trails, and AI governance guardrails"
-        elif "guardrail" in ft_gov:
-            concrete_finding = "engineering AI governance guardrails, model monitoring, and automated compliance verification for production systems"
+        elif "guardrail" in exc_lower:
+            concrete_finding = "engineering AI governance guardrails, model monitoring, and automated compliance verification"
         else:
-            concrete_finding = "building AI governance, auditing, and safety systems for enterprise AI deployments"
+            concrete_finding = "building AI governance, auditing, and safety systems"
 
     elif domain_class == DOMAIN_RAG_AGENTS:
-        ft_lower = full_text.lower()
-        if any(k in ft_lower for k in ("bfsi", "fintech", "in-app ai", "in-app agent", "onboarding", "kyc")):
-            concrete_finding = "developing in-app AI agents and conversational workflows for financial services customer journeys"
-        elif any(k in ft_lower for k in ("whatsapp", "crm", "sales agent", "lead management")):
-            concrete_finding = "developing conversational AI agents and automated workflow engines for multi-channel sales and customer communications"
-        elif any(k in ft_lower for k in ("rag", "retrieval-augmented generation", "custom rag", "knowledge base", "custom connectors", "hybrid search", "citation")):
-            concrete_finding = "engineering and deploying production-ready AI agents, conversational assistants, and custom RAG pipelines"
-        elif any(k in ft_lower for k in ("enterprise", "regulated", "voice", "omnichannel", "soc2")):
-            concrete_finding = "building enterprise-grade agentic AI platforms with multi-channel voice, chat, and workflow automation"
-        elif any(k in ft_lower for k in ("talent graph", "screening", "assessment agent")):
-            concrete_finding = "deploying autonomous talent assessment agents and conversational screening workflows on a unified graph platform"
-        elif "retrieval" in ft_lower and "agent" in ft_lower:
-            concrete_finding = "building custom retrieval-augmented generation (RAG) architectures and autonomous AI agent workflows"
-        elif "agent" in ft_lower:
+        if any(k in exc_lower for k in ("in-app ai", "in-app agent", "onboarding")):
+            concrete_finding = "developing in-app AI agents and conversational workflows"
+        elif any(k in exc_lower for k in ("whatsapp", "crm", "sales agent", "lead management")):
+            concrete_finding = "developing conversational AI agents and automated workflow engines"
+        elif any(k in exc_lower for k in ("talent graph", "screening", "assessment agent")):
+            concrete_finding = "deploying autonomous talent assessment agents and conversational screening workflows"
+        elif any(k in exc_lower for k in ("custom connectors", "hybrid search", "citation", "document", "knowledge base")):
+            if "agent" in ft_lower or (matched_areas and any("agent" in a.lower() for a in matched_areas)):
+                concrete_finding = "building custom retrieval-augmented generation (RAG) architectures and autonomous AI agents and workflows"
+            else:
+                concrete_finding = "building custom retrieval-augmented generation (RAG) architectures and knowledge retrieval pipelines"
+        elif "retrieval" in exc_lower and "agent" in exc_lower:
+            concrete_finding = "building custom retrieval-augmented generation (RAG) architectures and autonomous AI agents and workflows"
+        elif "agent" in exc_lower and "rag" in exc_lower:
+            concrete_finding = "engineering AI agents, conversational assistants, and custom RAG pipelines"
+        elif "agent" in exc_lower:
             concrete_finding = "developing autonomous AI agents and intelligent workflow automation systems"
         else:
-            concrete_finding = "building production retrieval-augmented generation (RAG) systems and enterprise knowledge architectures"
+            concrete_finding = "building retrieval-augmented generation (RAG) systems and knowledge bases"
 
     elif domain_class == DOMAIN_DIFFUSION_VISION:
-        if any(k in full_text.lower() for k in ("diffusion", "flux", "controlnet")):
-            concrete_finding = "developing diffusion-based generative AI pipelines, image synthesis workflows, and GPU inference architectures"
-        elif "3d" in full_text.lower():
+        if any(k in exc_lower for k in ("flux", "controlnet", "stable diffusion", "diffusion")):
+            concrete_finding = "developing diffusion-based generative AI pipelines and image synthesis workflows"
+        elif "3d" in exc_lower:
             concrete_finding = "building 3D mesh synthesis and generative computer vision pipelines"
         else:
             concrete_finding = "developing computer vision systems and generative visual models"
 
     elif domain_class == DOMAIN_NLP_LINGUISTICS:
-        if any(k in full_text.lower() for k in ("resume", "ats", "scoring", "career os", "job description")):
-            concrete_finding = "developing automated resume analysis, ATS keyword scoring, and career intelligence platforms"
+        if any(k in exc_lower for k in ("resume", "ats", "scoring", "career os", "job description")):
+            concrete_finding = "developing automated resume analysis and ATS keyword scoring platforms"
         else:
-            concrete_finding = "developing natural language processing pipelines, language embeddings, and sequence modeling architectures"
+            concrete_finding = "developing natural language processing pipelines and language embeddings"
 
     elif domain_class == DOMAIN_ML_DATA_SYSTEMS:
-        ft_ml = full_text.lower()
-        if any(k in ft_ml for k in ("reasoning", "inference acceleration", "inference infrastructure", "production models")):
-            concrete_finding = "developing high-performance reasoning infrastructure and inference acceleration architectures for production models"
+        if any(k in exc_lower for k in ("reasoning", "inference acceleration", "inference infrastructure", "production models")):
+            concrete_finding = "developing reasoning infrastructure and inference acceleration architectures"
+        elif any(k in exc_lower for k in ("pipeline", "etl", "predictive", "mlops")):
+            concrete_finding = "building machine learning workflows, automated ETL data systems, and predictive models"
         else:
-            concrete_finding = "building scalable machine learning workflows, automated ETL data systems, and predictive models"
+            concrete_finding = "developing scalable machine learning pipelines and predictive models"
 
     elif domain_class == DOMAIN_GENERAL_AI:
         if best_excerpt:
             clean_exc = sanitize_evidence_text(best_excerpt)
-            concrete_finding = f"advancing applied machine learning architectures, including {clean_exc}" if clean_exc else "developing applied machine learning architectures and production AI systems"
+            concrete_finding = f"advancing applied machine learning architectures, including {clean_exc}" if len(clean_exc) < 120 else "developing applied machine learning architectures"
         else:
             concrete_finding = "developing applied machine learning architectures and production AI systems"
 
@@ -480,36 +555,52 @@ def analyze_company_opportunity(
         elif matched_areas:
             concrete_finding = f"technical initiatives in {', '.join(matched_areas)}"
         else:
-            concrete_finding = "technical initiatives in applied machine learning and software engineering"
+            concrete_finding = "technical initiatives in applied machine learning"
 
-    # Final cleanup to guarantee no contamination markers or dangling syntax
+    # Final cleanup to guarantee clean text
     concrete_finding = sanitize_evidence_text(concrete_finding)
 
-    # 5. Check internship status from research
+    # 5. Check internship status from research using canonical constants
     app_status = getattr(research_result, "application_status", "")
     role_status = getattr(research_result, "role_status", "")
     has_internship = False
     internship_details = ""
 
-    if app_status == "OPEN" or role_status == "CONFIRMED":
+    if app_status == APPLICATION_OPEN and role_status == FOUND:
         has_internship = True
         internship_details = "Verified advertised opening found."
-    elif role_status == "NOT_FOUND":
+    elif role_status == NOT_FOUND or app_status == APPLICATION_CLOSED:
         internship_details = "No advertised internship found; inquiry drafted as general exploratory outreach."
         uncertainties.append("No active internship listing detected; reaching out on speculative basis.")
     else:
         internship_details = "Internship availability unconfirmed."
         uncertainties.append("Internship status unverified from public sources.")
 
-    # 6. Assess evidence strength
-    if primary_url and best_excerpt and domain_class != DOMAIN_NONE:
+    # 6. Assess evidence strength honestly reflecting source verification and contradictions
+    ident_st = getattr(research_result, "company_identity_status", UNKNOWN)
+    dom_st = getattr(research_result, "domain_relationship_status", UNKNOWN)
+    has_contradictions = bool(getattr(research_result, "contradictions", []))
+    for cf in getattr(research_result, "company_facts", []):
+        if getattr(cf, "contradictions", None):
+            has_contradictions = True
+            uncertainties.extend(cf.contradictions)
+
+    if has_contradictions:
+        evidence_strength = "WEAK"
+        if getattr(research_result, "contradictions", None):
+            uncertainties.extend(research_result.contradictions)
+    elif ident_st == SUPPORTED and dom_st in (SUPPORTED, NOT_APPLICABLE) and primary_url and best_excerpt and domain_class != DOMAIN_NONE:
         evidence_strength = "STRONG"
-    elif primary_url and domain_class != DOMAIN_NONE:
+    elif primary_url and best_excerpt and domain_class != DOMAIN_NONE:
         evidence_strength = "MODERATE"
-    elif matched_areas:
+    elif primary_url or matched_areas:
         evidence_strength = "WEAK"
     else:
         evidence_strength = "NONE"
+
+    # If evidence is weak or none, ensure uncertainty is recorded
+    if evidence_strength in ("WEAK", "NONE"):
+        uncertainties.append("Company evidence is weak or unverified; requires human review.")
 
     return CompanyOpportunity(
         company_name=clean_name,
@@ -523,4 +614,6 @@ def analyze_company_opportunity(
         has_advertised_internship=has_internship,
         internship_details=internship_details,
         uncertainties=uncertainties,
+        company_facts=company_facts,
+        primary_fact_id=primary_fact_id,
     )

@@ -95,6 +95,7 @@ def generate_personalized_email_body(
     )
 
     # 1. Try LLM Generation if configured and company has substantive evidence for direct applications
+    llm_meta: dict[str, Any] = {}
     if (
         router
         and router.has_any_llm
@@ -118,10 +119,13 @@ def generate_personalized_email_body(
                 return (
                     strip_markdown_formatting(llm_result[0]),
                     strip_markdown_formatting(llm_result[1]),
-                    {"method": "llm", "provider": router.primary.provider_name},
+                    llm_result[2],
                 )
+            else:
+                llm_meta = {"llm_attempted": True, "llm_fallback": True}
         except Exception as exc:
             logger.warning(f"LLM draft generation failed: {exc}. Using grounded deterministic composer.")
+            llm_meta = {"llm_attempted": True, "llm_fallback": True, "llm_error": str(exc)}
 
     # 2. Grounded Deterministic Composer
     body = _compose_grounded_email(
@@ -140,7 +144,9 @@ def generate_personalized_email_body(
         matched_areas=matched_areas,
     )
 
-    return strip_markdown_formatting(subject), strip_markdown_formatting(body), {"method": "grounded_deterministic"}
+    det_meta: dict[str, Any] = {"method": "grounded_deterministic"}
+    det_meta.update(llm_meta)
+    return strip_markdown_formatting(subject), strip_markdown_formatting(body), det_meta
 
 
 def _compose_grounded_email(
@@ -208,44 +214,14 @@ def _compose_grounded_email(
         )
 
     # Substantive Alignment Paragraph
-    # Check if this is a Tailored CV mode
-    if mode == WorkflowMode.TAILORED_CV and project_selection:
-        p1 = project_selection.primary_project.get("name", "")
-        secondaries = project_selection.secondary_projects or []
-        p2 = secondaries[0].get("name", "") if secondaries else ""
-        projects_summary = f"{p1} and {p2}" if p2 else p1
-
-        if opportunity.concrete_finding and clean_company:
-            finding_intro = f"Given {clean_company}'s work in {opportunity.concrete_finding}, "
-        elif matched_areas and clean_company:
-            finding_intro = f"Given {clean_company}'s focus on {', '.join(matched_areas)}, "
-        else:
-            finding_intro = ""
-
-        profile_exp = profile.get("experience", [])
-        has_red_panda = any("red panda" in exp.get("organization", "").lower() for exp in profile_exp)
-        intern_text = "alongside my internship experience developing diffusion pipelines and ML inference workflows, " if has_red_panda else ""
-
-        alignment = (
-            f"{finding_intro}I wanted to highlight my practical experience building scalable AI systems. "
-            f"Through {projects_summary}, {intern_text}I have focused on building "
-            f"reliable, production-grade AI architectures."
-        )
-
     # Uploaded CV mode with STRONG/MODERATE company evidence
     # Build alignment using the company-specific concrete_finding and the
     # candidate's domain-matched concrete_candidate_work.
-    # We deliberately do NOT use candidate_match.connection_rationale here
-    # because that field is still domain-keyed (same phrasing for all
-    # DOMAIN_RAG_AGENTS companies, for example).  Instead we anchor the
-    # sentence to opportunity.concrete_finding, which IS company-specific.
-    elif opportunity.concrete_finding and opportunity.evidence_strength in ("STRONG", "MODERATE") and clean_company:
+    if opportunity.concrete_finding and opportunity.evidence_strength in ("STRONG", "MODERATE") and clean_company:
         work = candidate_match.concrete_candidate_work
         finding = sanitize_evidence_text(opportunity.concrete_finding)
 
         # Determine a concise lead-in verb phrase from the finding text.
-        # If the finding already starts with an action verb (e.g. "engineering...",
-        # "developing..."), prefix with "on"; otherwise use "in".
         finding_lower = finding.lower().strip()
         action_starters = (
             "engineering", "developing", "building", "designing", "deploying",
@@ -256,10 +232,16 @@ def _compose_grounded_email(
         else:
             company_clause = f"Given {clean_company}'s focus on {finding}"
 
-        alignment = (
-            f"{company_clause}, I believe my experience is directly relevant. "
-            f"I {work}."
-        )
+        if work.startswith(("In my ", "During my ", "Through my ")):
+            alignment = (
+                f"{company_clause}, I believe my experience is directly relevant. "
+                f"{work}."
+            )
+        else:
+            alignment = (
+                f"{company_clause}, I believe my experience is directly relevant. "
+                f"I {work}."
+            )
 
     # Backward-compatible fallback when only matched_areas is available (legacy unit tests)
     elif matched_areas and clean_company:
@@ -354,7 +336,7 @@ def _generate_with_llm(
     context: OutreachContext,
     referrer_name: str,
     duration_phrase: str,
-) -> tuple[str, str] | None:
+) -> tuple[str, str, dict[str, Any]] | None:
     """Invoke LLM to generate structured outreach email with grounded constraints."""
     from src.outreach.drafting import _build_salutation, _build_signature, build_subject_line
 
@@ -374,19 +356,28 @@ def _generate_with_llm(
         "You are an expert technical assistant drafting a concise, highly tailored cold outreach email for an "
         "engineering internship inquiry. The candidate is a 4th-year Dual Degree student at IIT Kharagpur.\n"
         "STRICT GROUNDING CONSTRAINTS:\n"
-        "1. Mention ONLY the company technical focus provided in the prompt. Never invent products or initiatives.\n"
-        "2. Connect ONLY the specified candidate experience provided in the prompt. Never invent past employers or tools.\n"
-        "3. Do NOT use boilerplate buzzword dumps like 'focus on Generative AI, Agentic AI, AI/ML, Data Science, Software Engineering'.\n"
-        "4. Tone: direct, humble, engineering-focused, natural, concise (under 200 words total).\n"
-        "5. Output valid JSON with keys: 'opening_paragraph', 'alignment_paragraph', 'closing_paragraph'."
+        "1. Mention ONLY the company technical focus and verified evidence provided in the prompt. Never invent products or initiatives.\n"
+        "2. Connect ONLY the specified candidate experience provided in the prompt. ControlPlane.ai is a personal project, NOT an employer.\n"
+        "3. Never claim an active opening unless Hiring Status indicates verified advertised opening.\n"
+        "4. Do NOT use boilerplate buzzword dumps like 'focus on Generative AI, Agentic AI, AI/ML, Data Science, Software Engineering'.\n"
+        "5. Tone: direct, humble, engineering-focused, natural, concise (under 200 words total).\n"
+        "6. Output valid JSON with keys: 'opening_paragraph', 'alignment_paragraph', 'closing_paragraph'."
     )
+
+    hiring_status_text = "Verified advertised opening found." if opportunity.has_advertised_internship else "No confirmed listing found; speculative inquiry."
+    fact_ids_text = opportunity.primary_fact_id or "fact-001"
+    profile_fields_text = ", ".join(candidate_match.supporting_profile_fields) if candidate_match.supporting_profile_fields else "master_profile"
 
     prompt = (
         f"Company Name: {clean_company}\n"
+        f"Company Fact ID: {fact_ids_text}\n"
         f"Company Technical Focus: {opportunity.concrete_finding}\n"
+        f"Source Excerpt: {opportunity.source_excerpt}\n"
+        f"Hiring Status: {hiring_status_text}\n"
         f"Candidate Education: 4th-year Dual Degree student at {edu_inst}\n"
         f"Selected Candidate Experience: {candidate_match.organization_or_project}\n"
         f"Candidate Concrete Work: {candidate_match.concrete_candidate_work}\n"
+        f"Candidate Profile Fields: {profile_fields_text}\n"
         f"Connection Rationale: {candidate_match.connection_rationale}\n"
         f"Availability: {duration_phrase}\n"
         f"Target Role: {role_mention}\n\n"
@@ -397,9 +388,21 @@ def _generate_with_llm(
     resp = router.generate_json_with_fallback(prompt=prompt, system_instruction=system_instruction)
     if resp.success and resp.parsed_json:
         pj = resp.parsed_json
-        opening = sanitize_evidence_text(pj.get("opening_paragraph", "").strip())
-        alignment = sanitize_evidence_text(pj.get("alignment_paragraph", "").strip())
-        closing = sanitize_evidence_text(pj.get("closing_paragraph", "").strip())
+        if not isinstance(pj, dict):
+            logger.warning("LLM output is not a JSON dictionary: %s", type(pj))
+            return None
+
+        opening_val = pj.get("opening_paragraph")
+        alignment_val = pj.get("alignment_paragraph")
+        closing_val = pj.get("closing_paragraph")
+
+        if not (isinstance(opening_val, str) and isinstance(alignment_val, str) and isinstance(closing_val, str)):
+            logger.warning("LLM output failed schema validation: required string paragraphs missing.")
+            return None
+
+        opening = sanitize_evidence_text(opening_val.strip())
+        alignment = sanitize_evidence_text(alignment_val.strip())
+        closing = sanitize_evidence_text(closing_val.strip())
 
         # Clean any accidental leading salutation in opening paragraph
         opening = re.sub(r"^(Dear|Hi|Hello)\s+[^,\n]+,\s*", "", opening, flags=re.IGNORECASE).strip()
@@ -429,6 +432,13 @@ def _generate_with_llm(
                 "",
                 signature,
             ]
-            return strip_markdown_formatting(subject), strip_markdown_formatting("\n".join(body_parts))
+            gen_meta = {
+                "method": "llm",
+                "provider": resp.provider_name or getattr(router.primary, "provider_name", "llm"),
+                "model": resp.model_name,
+                "fallback_reason": resp.fallback_reason,
+                "primary_error": getattr(resp, "primary_error", ""),
+            }
+            return strip_markdown_formatting(subject), strip_markdown_formatting("\n".join(body_parts)), gen_meta
 
     return None

@@ -39,7 +39,7 @@ def _atomic_write_json(file_path: Path, data: Any) -> None:
     """Atomically write JSON data to file_path via a temporary file and atomic replace with Windows retry."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temp_file = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4().hex[:8]}")
-    payload = json.dumps(data, indent=2)
+    payload = json.dumps(data, indent=2, default=str)
     try:
         temp_file.write_text(payload, encoding="utf-8")
         for attempt in range(5):
@@ -224,7 +224,29 @@ def save_draft_record(
         "campaign_id": campaign_id,
         "verification": verification_details or {},
         "classification": classification or {},
-        "research_evidence": research_evidence or [],
+        "research_evidence": research_evidence or (
+            [
+                {
+                    "source_url": s.get("source_url", ""),
+                    "title": s.get("title", draft.company_name),
+                    "extracted_text": s.get("excerpt", ""),
+                    "source_type": s.get("source_type", "official_website"),
+                    "retrieval_status": "RETRIEVAL_OK",
+                }
+                for s in (getattr(draft, "evidence_summary", []) or [])
+                if isinstance(s, dict) and s.get("excerpt")
+            ] or (
+                [
+                    {
+                        "source_url": getattr(draft.personalization_record, "evidence_source_url", ""),
+                        "title": getattr(draft.personalization_record, "evidence_source_title", draft.company_name),
+                        "extracted_text": getattr(draft.personalization_record, "source_excerpt", ""),
+                        "source_type": "official_website",
+                        "retrieval_status": "RETRIEVAL_OK",
+                    }
+                ] if getattr(getattr(draft, "personalization_record", None), "source_excerpt", "") else []
+            )
+        ),
         "generation_status": getattr(draft, "generation_status", "DRAFT_GENERATED"),
         "personalization_explanation": getattr(draft, "personalization_explanation", ""),
         "evidence_summary": getattr(draft, "evidence_summary", ""),
@@ -453,6 +475,38 @@ def regenerate_draft_content(
             retrieval_status=RETRIEVAL_OK,
             supports=ev.get("supports", []),
         ))
+
+    comp = draft_data.get("company_name", "")
+    if not evidence:
+        for s in draft_data.get("evidence_summary", []):
+            if isinstance(s, dict) and s.get("excerpt"):
+                evidence.append(EvidenceItem(
+                    source_url=s.get("source_url", ""),
+                    source_type="web_page",
+                    title=comp,
+                    extracted_text=s.get("excerpt", ""),
+                    retrieval_status=RETRIEVAL_OK,
+                    supports=["company_identity", "technical_relevance"],
+                ))
+            elif isinstance(s, str) and s.strip():
+                evidence.append(EvidenceItem(
+                    source_url="",
+                    source_type="web_page",
+                    title=comp,
+                    extracted_text=s.strip(),
+                    retrieval_status=RETRIEVAL_OK,
+                    supports=["company_identity", "technical_relevance"],
+                ))
+        prec = draft_data.get("personalization_record", {})
+        if not evidence and prec.get("source_excerpt"):
+            evidence.append(EvidenceItem(
+                source_url=prec.get("evidence_source_url", ""),
+                source_type="web_page",
+                title=prec.get("evidence_source_title", comp),
+                extracted_text=prec.get("source_excerpt", ""),
+                retrieval_status=RETRIEVAL_OK,
+                supports=["company_identity", "technical_relevance"],
+            ))
 
     summary = draft_data.get("evidence_summary", [])
     comp = draft_data.get("company_name", "")

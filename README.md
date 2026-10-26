@@ -118,9 +118,9 @@ SMARTMAIL_SHARE_CV_WITH_EXTERNAL_LLM=false
 # Search & LLM Providers (Free Tiers Supported)
 TAVILY_API_KEY=tvly-your-optional-tavily-key
 GEMINI_API_KEY=AIzaSy-your-gemini-key
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 GROQ_API_KEY=gsk_your-groq-key
-GROQ_MODEL=openai/gpt-oss-20b
+GROQ_MODEL=openai/gpt-oss-120b
 ```
 
 Check your configuration status anytime via CLI (keys are never printed or leaked):

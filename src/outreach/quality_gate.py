@@ -96,6 +96,12 @@ def evaluate_personalization_quality(
         ]
         matches = sum(1 for w in finding_words if w in body_lower)
         has_anchor = matches >= 2 or (comp_clean.lower() in body_lower and matches >= 1)
+        # Check company fact provenance if structured facts exist
+        if opportunity.company_facts and not any(f.validation_status == "VALIDATED" for f in opportunity.company_facts):
+            has_anchor = False
+            failures.append("Company claim provenance failure: no validated company facts found in retrieved source.")
+            review_flags.append("Company evidence provenance failed span validation.")
+
         checks["has_supported_anchor"] = has_anchor
         if not has_anchor:
             failures.append("Missing company-specific anchor: email does not reflect verified research findings.")
@@ -148,16 +154,49 @@ def evaluate_personalization_quality(
         "flux", "stable diffusion", "controlnet", "trellis", "aws", "celery", "redis",
         "deberta", "bert", "t5", "lstm", "gru", "scikit-learn", "mlflow", "dagshub", "docker"
     )
-    # Extract any tools claimed as candidate experience
     candidate_claims_grounded = True
     for tool in known_candidate_tools:
         if tool in body_lower and tool not in profile_text:
             candidate_claims_grounded = False
             break
+
+    # Candidate Invariant: ControlPlane.ai is a personal project, not an employer
+    if re.search(r"\b(?:during my time at|intern(?:ship)? at|employed at|worked as an employee at)\s+controlplane\b", body_lower):
+        candidate_claims_grounded = False
+        failures.append("Invalid candidate claim: ControlPlane.ai is a personal project, not an employer.")
+        review_flags.append("ControlPlane.ai mischaracterized as past employer rather than personal project.")
+
+    # Candidate Invariant: E-Commerce Price Prediction is transferable NLP, not ATS
+    if "price prediction" in body_lower and any(w in body_lower for w in ("resume-scoring", "ats system project", "resume scoring project")):
+        candidate_claims_grounded = False
+        failures.append("Invalid candidate claim: Price Prediction is transferable NLP, not a resume-scoring project.")
+        review_flags.append("Price Prediction project mischaracterized as resume scoring system.")
+
+    # Candidate Invariant: No unsupported production deployment claim
+    if "built production rag systems with citation-aware responses" in body_lower:
+        candidate_claims_grounded = False
+        failures.append("Ungrounded candidate claim: 'built production RAG systems with citation-aware responses' not in master profile.")
+        review_flags.append("Ungrounded RAG production deployment claim detected.")
+
+    # Candidate Invariant: No bloated/unsupported state-machine or classifier claims
+    bloated_claim_patterns = (
+        r"\b(?:9-node|nine-node)\s+state\s+machine\b",
+        r"\breciprocal\s+rank\s+fusion\b",
+        r"\bneo4j\s+compliance\b",
+        r"\bxgboost\s+hallucination\b",
+        r"\bragas\s+judge\b",
+    )
+    for pat in bloated_claim_patterns:
+        if re.search(pat, body_lower):
+            candidate_claims_grounded = False
+            failures.append(f"Bloated/unsupported claim detected in draft: matches '{pat}'.")
+            review_flags.append("Unsupported or bloated technical claim detected in body copy.")
+            break
+
     checks["grounded_candidate_claims"] = candidate_claims_grounded
-    if not candidate_claims_grounded:
-        failures.append("Ungrounded candidate claim: tool mentioned is not in master profile.")
-        review_flags.append("Candidate claim contains ungrounded technical skills.")
+    if not candidate_claims_grounded and not any("Candidate claim" in f or "Invalid candidate claim" in f or "Ungrounded candidate claim" in f or "Bloated" in f for f in failures):
+        failures.append("Ungrounded candidate claim: tool or claim mentioned is not supported by master profile.")
+        review_flags.append("Candidate claim contains ungrounded technical skills or relationships.")
 
     # 6. Check: No malformed fragments or research contamination
     # Disallows '[...]', '([...])', raw HTML, raw Markdown headers, or web navigation residue
@@ -222,6 +261,11 @@ def evaluate_personalization_quality(
             is_differentiated = False
             failures.append("Duplicate paragraph detected: diffusion models and middleware dumped together without domain alignment.")
             review_flags.append("Repetitive cross-domain paragraph detected.")
+
+        if "combining faiss and bm25 with reciprocal rank fusion" in body_lower or "nine-node state machine with parallel auditing" in body_lower:
+            is_differentiated = False
+            failures.append("Duplicate paragraph detected: hardcoded repetitive ControlPlane.ai boilerplate reused.")
+            review_flags.append("Repetitive ControlPlane.ai boilerplate detected.")
 
     checks["distinguishable_anchor"] = is_differentiated
 

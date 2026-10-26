@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import time
 from typing import Any
@@ -21,7 +22,15 @@ from typing import Any
 import requests
 
 from src.config import get_gemini_api_key, get_gemini_api_keys, get_gemini_model, get_gemini_timeout
-from src.llm.base import CredentialPool, LLMProvider, LLMResponse
+from src.llm.base import (
+    CredentialPool,
+    LLMProvider,
+    LLMResponse,
+    get_circuit_breaker,
+    get_rate_limiter,
+    parse_retry_after,
+    safe_parse_llm_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +65,12 @@ class GeminiProvider(LLMProvider):
             keys = [k.strip() for k in api_key if k and k.strip()]
 
         self._pool = CredentialPool(keys)
-        self._model = (model_name or get_gemini_model()).strip()
+        self._model = (model_name or get_gemini_model()).strip() or "gemini-3.8-flash"
         self._timeout = timeout or get_gemini_timeout()
         self._max_retries = max_retries
         self._initial_backoff = initial_backoff
+        self.circuit_breaker = get_circuit_breaker("gemini")
+        self.rate_limiter = get_rate_limiter("gemini")
 
     @property
     def provider_name(self) -> str:
@@ -106,6 +117,19 @@ class GeminiProvider(LLMProvider):
                 is_auth_error=True,
             )
 
+        allowed, block_reason = self.circuit_breaker.allow_request()
+        if not allowed:
+            logger.warning(f"Gemini request rejected by circuit breaker: {block_reason}")
+            return LLMResponse(
+                success=False,
+                provider_name=self.provider_name,
+                model_name=self._model,
+                error_message=block_reason,
+                error_category="CIRCUIT_OPEN",
+                circuit_open=True,
+                is_transient=False,
+            )
+
         url = f"{GEMINI_BASE_URL}/{self._model}:generateContent"
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
         body: dict[str, Any] = {"contents": contents}
@@ -115,7 +139,7 @@ class GeminiProvider(LLMProvider):
 
         generation_config: dict[str, Any] = {
             "temperature": 0.2,
-            "maxOutputTokens": 1024,
+            "maxOutputTokens": 2048,
         }
         if response_mime_type == "application/json":
             generation_config["responseMimeType"] = "application/json"
@@ -130,6 +154,7 @@ class GeminiProvider(LLMProvider):
             cred = self._pool.get_next_available()
             if cred is None:
                 # All configured keys are either cooling down or disabled
+                self.circuit_breaker.record_failure("All Gemini keys in cooldown", is_permanent=False, cooldown_override=30.0)
                 return LLMResponse(
                     success=False,
                     provider_name=self.provider_name,
@@ -137,6 +162,7 @@ class GeminiProvider(LLMProvider):
                     error_message="All Gemini API keys are currently cooling down or disabled.",
                     error_category="RATE_LIMIT",
                     is_rate_limited=True,
+                    is_transient=True,
                     retries_attempted=retries,
                 )
 
@@ -147,40 +173,124 @@ class GeminiProvider(LLMProvider):
             }
 
             try:
+                self.rate_limiter.acquire()
                 res = requests.post(url, json=body, headers=headers, timeout=self._timeout)
 
                 if res.status_code == 200:
                     cred.record_success()
+                    self.circuit_breaker.record_success()
                     data = res.json()
                     candidates = data.get("candidates", [])
                     if not candidates:
                         return LLMResponse(
                             success=False,
+                            http_status=200,
                             provider_name=self.provider_name,
                             model_name=self._model,
                             error_message="Gemini returned no candidates (possible safety filter block).",
                             error_category="INVALID_RESPONSE",
+                            finish_reason="NO_CANDIDATES",
                             used_key_masked=cred.masked_key,
                             retries_attempted=retries,
                         )
-                    content_parts = candidates[0].get("content", {}).get("parts", [])
+                    candidate = candidates[0]
+                    finish_reason = candidate.get("finishReason", "")
+                    if finish_reason == "SAFETY":
+                        return LLMResponse(
+                            success=False,
+                            http_status=200,
+                            provider_name=self.provider_name,
+                            model_name=self._model,
+                            error_message="Gemini candidate blocked by safety filter.",
+                            error_category="SAFETY_BLOCKED",
+                            finish_reason="SAFETY",
+                            used_key_masked=cred.masked_key,
+                            retries_attempted=retries,
+                        )
+                    content_parts = candidate.get("content", {}).get("parts", [])
                     text = "".join(p.get("text", "") for p in content_parts)
+                    if not text.strip():
+                        return LLMResponse(
+                            success=False,
+                            http_status=200,
+                            provider_name=self.provider_name,
+                            model_name=self._model,
+                            error_message=f"Gemini returned empty text (finishReason: {finish_reason or 'UNKNOWN'}).",
+                            error_category="EMPTY_RESPONSE",
+                            finish_reason=finish_reason,
+                            used_key_masked=cred.masked_key,
+                            retries_attempted=retries,
+                        )
                     return LLMResponse(
                         success=True,
                         text=text,
+                        http_status=200,
+                        finish_reason=finish_reason,
                         provider_name=self.provider_name,
                         model_name=self._model,
                         used_key_masked=cred.masked_key,
                         retries_attempted=retries,
                     )
 
+                elif res.status_code == 404:
+                    err_detail = ""
+                    try:
+                        err_detail = res.json().get("error", {}).get("message", "")
+                    except Exception:
+                        pass
+                    err_msg = f"HTTP 404 Model Not Found ({self._model}): {err_detail or 'The requested model does not exist on Gemini'}"
+                    logger.error(err_msg)
+                    self.circuit_breaker.record_failure(reason=err_msg, is_permanent=True)
+                    return LLMResponse(
+                        success=False,
+                        http_status=404,
+                        is_transient=False,
+                        provider_name=self.provider_name,
+                        model_name=self._model,
+                        error_message=err_msg,
+                        error_category="MODEL_NOT_FOUND",
+                        used_key_masked=cred.masked_key,
+                        retries_attempted=retries,
+                    )
+
                 elif res.status_code == 429:
-                    cred.set_cooldown(duration_seconds=60.0, reason="HTTP 429 RESOURCE_EXHAUSTED")
                     retries += 1
+                    retry_after = parse_retry_after(res.headers.get("Retry-After"))
+                    self.circuit_breaker.record_failure(reason="HTTP 429 Rate Limit", is_permanent=False, cooldown_override=retry_after)
+                    has_other_keys = len(self._pool.credentials) > 1 and self._pool.get_next_available() is not None
+
+                    if has_other_keys:
+                        # Multi-key pool: put current key on cooldown and switch immediately
+                        cred.set_cooldown(duration_seconds=60.0, reason="HTTP 429 RESOURCE_EXHAUSTED")
+                    else:
+                        # Single-key pool or no alternative keys: do NOT lockout key before exhausting retries!
+                        if retries > self._max_retries:
+                            cred.set_cooldown(duration_seconds=60.0, reason="HTTP 429 RESOURCE_EXHAUSTED (exhausted retries)")
+                            logger.warning("Gemini rate limit exceeded after max retries.")
+                            return LLMResponse(
+                                success=False,
+                                http_status=429,
+                                is_transient=True,
+                                provider_name=self.provider_name,
+                                model_name=self._model,
+                                error_message="Gemini rate limit exceeded (HTTP 429).",
+                                error_category="RATE_LIMIT",
+                                is_rate_limited=True,
+                                used_key_masked=cred.masked_key,
+                                retries_attempted=retries,
+                            )
+                        # Back off with jitter and respect Retry-After
+                        delay = min(retry_after if retry_after > 0 else (backoff + random.uniform(0.1, 0.4)), 3.0)
+                        time.sleep(delay)
+                        backoff *= 2
+                        continue
+
                     if retries > self._max_retries:
                         logger.warning("Gemini rate limit exceeded after max retries.")
                         return LLMResponse(
                             success=False,
+                            http_status=429,
+                            is_transient=True,
                             provider_name=self.provider_name,
                             model_name=self._model,
                             error_message="Gemini rate limit exceeded (HTTP 429).",
@@ -189,21 +299,21 @@ class GeminiProvider(LLMProvider):
                             used_key_masked=cred.masked_key,
                             retries_attempted=retries,
                         )
-                    if self._pool.get_next_available() is None:
-                        time.sleep(backoff)
-                        backoff *= 2
                     continue
 
                 elif res.status_code in (401, 403):
                     cred.mark_disabled(reason=f"HTTP {res.status_code} Auth Failure")
                     err_msg = f"HTTP {res.status_code}: Check GEMINI_API_KEY or permissions ({self._model})."
                     logger.warning(f"Gemini API auth error: {err_msg}")
+                    self.circuit_breaker.record_failure(reason=err_msg, is_permanent=True)
                     # If other keys available in pool, attempt next key
                     if self._pool.get_next_available() is not None and retries < self._max_retries:
                         retries += 1
                         continue
                     return LLMResponse(
                         success=False,
+                        http_status=res.status_code,
+                        is_transient=False,
                         provider_name=self.provider_name,
                         model_name=self._model,
                         error_message=err_msg,
@@ -214,10 +324,18 @@ class GeminiProvider(LLMProvider):
                     )
 
                 elif res.status_code == 400:
-                    err_msg = f"HTTP 400: Bad request or unsupported model ({self._model})."
+                    err_detail = ""
+                    try:
+                        err_detail = res.json().get("error", {}).get("message", "")
+                    except Exception:
+                        pass
+                    err_msg = f"HTTP 400: {err_detail or 'Bad request or unsupported model'} ({self._model})."
                     logger.warning(f"Gemini bad request: {err_msg}")
+                    self.circuit_breaker.record_failure(reason=err_msg, is_permanent=True)
                     return LLMResponse(
                         success=False,
+                        http_status=400,
+                        is_transient=False,
                         provider_name=self.provider_name,
                         model_name=self._model,
                         error_message=err_msg,
@@ -226,14 +344,40 @@ class GeminiProvider(LLMProvider):
                         retries_attempted=retries,
                     )
 
+                elif res.status_code in (500, 502, 503, 504):
+                    retries += 1
+                    err_detail = ""
+                    try:
+                        err_detail = res.json().get("error", {}).get("message", "")
+                    except Exception:
+                        pass
+                    if retries > self._max_retries:
+                        return LLMResponse(
+                            success=False,
+                            http_status=res.status_code,
+                            is_transient=True,
+                            provider_name=self.provider_name,
+                            model_name=self._model,
+                            error_message=f"Gemini server error HTTP {res.status_code}: {err_detail or 'The model is overloaded.'}",
+                            error_category="SERVER_ERROR",
+                            used_key_masked=cred.masked_key,
+                            retries_attempted=retries,
+                        )
+                    delay = min(backoff + random.uniform(0.1, 0.5), 3.0)
+                    time.sleep(delay)
+                    backoff *= 2
+                    continue
+
                 else:
                     retries += 1
                     if retries > self._max_retries:
                         return LLMResponse(
                             success=False,
+                            http_status=res.status_code,
+                            is_transient=False,
                             provider_name=self.provider_name,
                             model_name=self._model,
-                            error_message=f"Gemini server error HTTP {res.status_code}",
+                            error_message=f"Gemini server error HTTP {res.status_code}: {res.text[:200]}",
                             error_category="SERVER_ERROR",
                             used_key_masked=cred.masked_key,
                             retries_attempted=retries,
@@ -247,6 +391,8 @@ class GeminiProvider(LLMProvider):
                 if retries > self._max_retries:
                     return LLMResponse(
                         success=False,
+                        http_status=408,
+                        is_transient=True,
                         provider_name=self.provider_name,
                         model_name=self._model,
                         error_message=f"Gemini request timed out after {self._timeout}s.",
@@ -254,7 +400,7 @@ class GeminiProvider(LLMProvider):
                         used_key_masked=last_cred.masked_key if last_cred else "",
                         retries_attempted=retries,
                     )
-                time.sleep(backoff)
+                time.sleep(min(backoff + random.uniform(0.1, 0.3), 2.0))
                 backoff *= 2
 
             except Exception as exc:
@@ -264,12 +410,15 @@ class GeminiProvider(LLMProvider):
                     model_name=self._model,
                     error_message=f"Gemini request failed: {type(exc).__name__}",
                     error_category="SERVER_ERROR",
+                    is_transient=True,
                     used_key_masked=last_cred.masked_key if last_cred else "",
                     retries_attempted=retries,
                 )
 
         return LLMResponse(
             success=False,
+            http_status=429,
+            is_transient=True,
             provider_name=self.provider_name,
             model_name=self._model,
             error_message="Gemini request exhausted retries.",
@@ -286,14 +435,12 @@ class GeminiProvider(LLMProvider):
         if not resp.success:
             return resp
 
-        # Parse JSON defensively
-        raw_text = _clean_json_markdown(resp.text)
-        try:
-            parsed = json.loads(raw_text)
-            resp.parsed_json = parsed if isinstance(parsed, dict) else {"data": parsed}
-            return resp
-        except json.JSONDecodeError as exc:
+        parsed, err_cat, err_msg = safe_parse_llm_json(resp.text, finish_reason=resp.finish_reason)
+        if parsed is None:
             resp.success = False
-            resp.error_category = "PARSE_ERROR"
-            resp.error_message = f"Failed to parse LLM JSON output: {exc}"
+            resp.error_category = err_cat
+            resp.error_message = err_msg
             return resp
+
+        resp.parsed_json = parsed
+        return resp

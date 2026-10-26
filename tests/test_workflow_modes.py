@@ -163,71 +163,46 @@ class TestUploadedCVModeSafeguards:
             )
 
 
-class TestTailoredCVWorkflowIntegration:
-    """Tests for running the complete workflow in Tailored CV Mode."""
+class TestUploadedCVWorkflowEnforcement:
+    """Tests confirming Uploaded CV Mode is the sole supported execution path (Phase 15)."""
 
-    def test_tailored_mode_runs_project_selection_and_cv_generation(
+    def test_workflow_requires_uploaded_cv_even_if_tailored_mode_specified(
         self, sample_contact, tmp_path
     ):
         workflow = OutreachWorkflow(default_mode=WorkflowMode.TAILORED_CV)
 
+        with pytest.raises(RuntimeError, match="Uploaded CV Mode requires an existing CV file"):
+            workflow.process_contact(
+                contact=sample_contact,
+                job_description="Seeking a machine learning engineer with NLP, DeBERTa, and price prediction experience.",
+                research_provider=MockResearchProvider(),
+                custom_output_dir=tmp_path,
+            )
+
+    def test_uploaded_cv_workflow_enforced_and_no_cv_tailoring_performed(
+        self, dummy_uploaded_cv, sample_contact, tmp_path
+    ):
+        # Even if initialized or switched to TAILORED_CV, the workflow must strictly
+        # preserve uploaded CV workflow, never invoking CV generation or project selection.
+        workflow = OutreachWorkflow(
+            uploaded_cv_path=dummy_uploaded_cv,
+            default_mode=WorkflowMode.TAILORED_CV,
+        )
+
         result = workflow.process_contact(
             contact=sample_contact,
-            job_description="Seeking a machine learning engineer with NLP, DeBERTa, and price prediction experience.",
+            job_description="AI Intern",
             research_provider=MockResearchProvider(),
             custom_output_dir=tmp_path,
         )
 
         assert result.status == "PROCEED"
-        assert workflow.project_selection_invoked is True
-        assert workflow.cv_generation_invoked is True
-        assert result.selection_result is not None
-        assert result.tailored_cv is not None
-
-        # Verify selected projects: ControlPlane.ai first, E-Commerce Price Prediction second
-        selected = result.selection_result.selected_projects
-        assert len(selected) == 3
-        assert selected[0]["name"].startswith("ControlPlane.ai")
-        assert selected[1]["name"] == "E-Commerce Price Prediction"
-        assert selected[2]["name"] == "Building a Network Security System"
-
-        # Verify draft attachment is the tailored CV file
-        assert result.draft is not None
-        assert result.draft.attachment_path == result.tailored_cv.file_path
-        assert Path(result.draft.attachment_path).exists()
-        assert Path(result.draft.attachment_path).parent == tmp_path
-
-        # Verify email mentions the relevant projects
-        assert "ControlPlane.ai" in result.draft.body
-        assert "E-Commerce Price Prediction" in result.draft.body
-
-    def test_switching_modes_changes_workflow_behavior(
-        self, dummy_uploaded_cv, sample_contact, tmp_path
-    ):
-        workflow = OutreachWorkflow(
-            uploaded_cv_path=dummy_uploaded_cv,
-            default_mode=WorkflowMode.UPLOADED_CV,
-        )
-
-        # 1. Run in Uploaded CV Mode
-        res_uploaded = workflow.process_contact(
-            contact=sample_contact,
-            job_description="AI Intern",
-            research_provider=MockResearchProvider(),
-        )
         assert workflow.project_selection_invoked is False
         assert workflow.cv_generation_invoked is False
-        assert res_uploaded.draft.attachment_path == str(dummy_uploaded_cv.resolve())
+        assert result.selection_result is None
+        assert result.tailored_cv is None
 
-        # 2. Switch to Tailored CV Mode
-        workflow.set_mode(WorkflowMode.TAILORED_CV)
-        res_tailored = workflow.process_contact(
-            contact=sample_contact,
-            job_description="AI Intern",
-            research_provider=MockResearchProvider(),
-            custom_output_dir=tmp_path,
-        )
-        assert workflow.project_selection_invoked is True
-        assert workflow.cv_generation_invoked is True
-        assert res_tailored.draft.attachment_path != str(dummy_uploaded_cv.resolve())
-        assert res_tailored.draft.attachment_path == res_tailored.tailored_cv.file_path
+        # Attachment is strictly the uploaded CV
+        assert result.draft is not None
+        assert result.draft.attachment_path == str(dummy_uploaded_cv.resolve())
+        assert workflow.verify_uploaded_cv_unmodified() is True
